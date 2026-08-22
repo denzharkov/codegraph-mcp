@@ -56,15 +56,27 @@ export function buildReverseImports(graph) {
   const reverse = new Map();
   // basename index for the fallback: "utils" -> [paths]
   const byBasename = new Map();
+  // source-root prefixes: src-layout projects (src/pkg/...) import by package
+  // name, so candidates are also tried under each top-level directory
+  const roots = new Set(['']);
   for (const file of graph.files.keys()) {
     const base = file.slice(file.lastIndexOf('/') + 1).replace(/\.[^.]+$/, '');
     if (!byBasename.has(base)) byBasename.set(base, []);
     byBasename.get(base).push(file);
+    const cut = file.indexOf('/');
+    if (cut > 0) roots.add(file.slice(0, cut + 1));
   }
+  const resolveCandidate = (c) => {
+    for (const r of roots) {
+      const full = r + c;
+      if (graph.files.has(full)) return full;
+    }
+    return null;
+  };
 
   for (const [file, rec] of graph.files) {
     for (const spec of rec.imports) {
-      let targets = candidates(file, rec.lang, spec).filter((c) => graph.files.has(c));
+      let targets = candidates(file, rec.lang, spec).map(resolveCandidate).filter(Boolean);
       if (targets.length === 0 && !spec.startsWith('.') && !spec.includes(' ')) {
         // fallback: match last path segment against basenames (go/rust/java/c includes)
         const last = spec.split(/[/\\:]/).pop().replace(/\.[^.]+$/, '');

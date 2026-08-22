@@ -286,6 +286,29 @@ test('gdscript extractor finds funcs, signals, classes and calls', async () => {
   assert.equal(byName._health.exported, false);
 });
 
+test('python src-layout: package imports resolve through the source root', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-srclayout-'));
+  try {
+    const write = (rel, content) => {
+      const abs = path.join(dir, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, content);
+    };
+    write('src/mypkg/__init__.py', '');
+    write('src/mypkg/db.py', 'class Database:\n    def connect(self):\n        return True\n');
+    write('src/mypkg/main.py', 'from mypkg.db import Database\n\ndef run():\n    return Database()\n');
+    const { Index } = await import('../src/indexer.js');
+    const { buildReverseImports } = await import('../src/imports.js');
+    const index = new Index(dir);
+    await index.ensure();
+    const rev = buildReverseImports(index.graph);
+    const dependents = rev.get('src/mypkg/db.py');
+    assert.ok(dependents && dependents.has('src/mypkg/main.py'), 'main.py -> db.py edge resolved through src/ root');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
 test('js extractor captures dynamic import() and require() as imports', async () => {
   const { extractFile } = await import('../src/extract.js');
   const src = "import fs from 'fs';\nasync function load() {\n  const { Index } = await import('../src/indexer.js');\n  const legacy = require('./legacy.js');\n  return new Index(legacy);\n}\n";

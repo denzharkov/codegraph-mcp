@@ -216,6 +216,13 @@ export async function generateArchMap(root, liveIndex = null) {
   function colorVar(cluster) { var i = clusterNames.indexOf(cluster); return 'var(--c' + (i < 8 ? i + 1 : 0) + ')'; }
   function clusterFiles(c) { return nodes.filter(function (n) { return n.cluster === c; }); }
   var cName = function (c) { return c === '.' ? 'root' : c; };
+  function shortName(id) {
+    var parts = id.split('/');
+    var base = parts[parts.length - 1];
+    // __init__.py / index.js alone say nothing — include the package dir
+    if (/^(__init__\.|index\.)/.test(base) && parts.length > 1) return parts[parts.length - 2] + '/' + base;
+    return base;
+  }
 
   // aggregated cluster->cluster weights
   var cAgg = {};
@@ -292,7 +299,7 @@ export async function generateArchMap(root, liveIndex = null) {
     var cards = clusterNames.map(function (c) {
       var files = clusterFiles(c);
       var syms = files.reduce(function (s, n) { return s + n.symbols; }, 0);
-      var tops = files.slice().sort(function (a, b) { return b.deg - a.deg; }).slice(0, 3).map(function (n) { return n.id.split('/').pop(); });
+      var tops = files.slice().sort(function (a, b) { return b.deg - a.deg; }).slice(0, 3).map(function (n) { return shortName(n.id); });
       return { c: c, files: files.length, syms: syms, tops: tops, w: 216, h: 100 };
     });
     var perRow = Math.max(2, Math.ceil(Math.sqrt(cards.length)));
@@ -335,9 +342,9 @@ export async function generateArchMap(root, liveIndex = null) {
       return '<li class="link" data-nav="' + esc(target) + '"><b>' + esc(label) + '</b> — ' + esc(note) + '</li>';
     };
     var views = [];
-    if (hub && hub.deg > 0) views.push(view(hub.id.split('/').pop(), '#f=' + hub.id, 'hub: imported by ' + hub.deg + ' files'));
-    if (entry) views.push(view(entry.id.split('/').pop(), '#f=' + entry.id, 'entry point: imports ' + (outb[entry.id] || []).length + ', imported by none'));
-    if (big && big !== hub) views.push(view(big.id.split('/').pop(), '#f=' + big.id, 'largest: ' + big.symbols + ' symbols'));
+    if (hub && hub.deg > 0) views.push(view(shortName(hub.id), '#f=' + hub.id, 'hub: imported by ' + hub.deg + ' files'));
+    if (entry) views.push(view(shortName(entry.id), '#f=' + entry.id, 'entry point: imports ' + (outb[entry.id] || []).length + ', imported by none'));
+    if (big && big !== hub) views.push(view(shortName(big.id), '#f=' + big.id, 'largest: ' + big.symbols + ' symbols'));
     setPanel(
       '<h2>' + esc(DATA.root) + '</h2>' +
       '<p class="meta">' + DATA.fileCount + ' files · ' + edges.length + ' import edges' + (DATA.aggregated ? ' · aggregated (repo over ' + ${MAX_FILE_NODES} + ' files)' : '') + '</p>' +
@@ -352,7 +359,7 @@ export async function generateArchMap(root, liveIndex = null) {
     var files = clusterFiles(c);
     if (files.length === 0) { location.hash = ''; return; }
     files.sort(function (a, b) { return b.deg - a.deg || b.symbols - a.symbols; });
-    var nodeW = function (n) { return Math.max(64, Math.min(190, truncate(n.id.split('/').pop(), 24).length * 6.6 + 34)); };
+    var nodeW = function (n) { return Math.max(64, Math.min(190, truncate(shortName(n.id), 24).length * 6.6 + 34)); };
     var intra = edges.filter(function (e) { return byId[e[0]].cluster === c && byId[e[1]].cluster === c; });
 
     // deterministic force layout: seeded ring start, spring edges, padded
@@ -448,7 +455,7 @@ export async function generateArchMap(root, liveIndex = null) {
     var chips = {};
     files.forEach(function (n) {
       var r = rect[n.id];
-      chips[n.id] = chip(r.x, r.y, r.w, truncate(n.id.split('/').pop(), 24), n.symbols, colorVar(c), function () {
+      chips[n.id] = chip(r.x, r.y, r.w, truncate(shortName(n.id), 24), n.symbols, colorVar(c), function () {
         if (selected === n.id) { location.hash = '#f=' + n.id; return; }
         selectFile(n, chips, edgeRefs);
       }, n.id);
@@ -492,7 +499,7 @@ export async function generateArchMap(root, liveIndex = null) {
     var colY = 34;
     var lb = el('text', 'clusterlabel'); lb.setAttribute('x', 0); lb.setAttribute('y', 20); lb.textContent = 'imported by · ' + ups.length;
     ups.slice(0, 16).forEach(function (f, i) {
-      chip(0, colY + i * 34, 170, truncate(f.split('/').pop(), 22), '', colorVar(byId[f].cluster), function () { location.hash = '#f=' + f; }, f);
+      chip(0, colY + i * 34, 170, truncate(shortName(f), 22), '', colorVar(byId[f].cluster), function () { location.hash = '#f=' + f; }, f);
     });
     var midX = 250;
     var lb2 = el('text', 'clusterlabel'); lb2.setAttribute('x', midX); lb2.setAttribute('y', 20); lb2.textContent = n.id + ' · ' + n.symbols + ' symbols';
@@ -511,7 +518,7 @@ export async function generateArchMap(root, liveIndex = null) {
     var rx = midX + symCols * (symW + 46) + 60;
     var lb3 = el('text', 'clusterlabel'); lb3.setAttribute('x', rx); lb3.setAttribute('y', 20); lb3.textContent = 'imports · ' + dns.length;
     dns.slice(0, 16).forEach(function (f, i) {
-      chip(rx, colY + i * 34, 170, truncate(f.split('/').pop(), 22), '', colorVar(byId[f].cluster), function () { location.hash = '#f=' + f; }, f);
+      chip(rx, colY + i * 34, 170, truncate(shortName(f), 22), '', colorVar(byId[f].cluster), function () { location.hash = '#f=' + f; }, f);
     });
     var kinds = {};
     (n.syms || []).forEach(function (s) { kinds[s.k] = (kinds[s.k] || 0) + 1; });
