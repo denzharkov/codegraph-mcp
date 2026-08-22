@@ -32,7 +32,7 @@ export async function createServer(root) {
   // Usage guidance ships with the server via MCP `instructions` — the client
   // (Claude Code) injects it automatically, so users need zero configuration.
   const server = new McpServer(
-    { name: 'codegraph', version: '0.8.0' },
+    { name: 'codegraph', version: '0.8.1' },
     {
       instructions: [
         'This server maintains a pre-built symbol graph of the repository. Prefer its tools over raw file reads and grep:',
