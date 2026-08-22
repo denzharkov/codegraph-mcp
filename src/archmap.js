@@ -346,16 +346,67 @@ export async function generateArchMap(root, liveIndex = null) {
     );
   }
 
-  // ---- level 2: one cluster ----
+  // ---- level 2: one cluster (star layout: hubs center, leaves spread) ----
+  function hash(s) { var h = 2166136261; for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0) / 4294967296; }
   function buildCluster(c) {
     var files = clusterFiles(c);
     if (files.length === 0) { location.hash = ''; return; }
     files.sort(function (a, b) { return b.deg - a.deg || b.symbols - a.symbols; });
     var nodeW = function (n) { return Math.max(64, Math.min(190, truncate(n.id.split('/').pop(), 24).length * 6.6 + 34)); };
-    var cellW = Math.max.apply(null, files.map(nodeW)) + 8;
-    var cols = Math.min(files.length, Math.max(1, Math.ceil(Math.sqrt(files.length * 34 / cellW * 2.6))));
-    var rows = Math.ceil(files.length / cols);
-    var boxW = cols * cellW + 20, boxH = rows * 34 + 40;
+    var intra = edges.filter(function (e) { return byId[e[0]].cluster === c && byId[e[1]].cluster === c; });
+
+    // deterministic force layout: seeded ring start, spring edges, padded
+    // repulsion so chips keep clear air between them
+    var R = 80 + files.length * 16;
+    files.forEach(function (n, i) {
+      var a = (i / files.length) * 6.283 + hash(n.id) * 0.8;
+      var r = R * (0.35 + 0.65 * hash(n.id + 'r'));
+      n.fx = Math.cos(a) * r; n.fy = Math.sin(a) * r; n.w2 = nodeW(n);
+    });
+    var iters = files.length > 120 ? 90 : 240;
+    for (var t = 0; t < iters; t++) {
+      for (var i = 0; i < files.length; i++) for (var j = i + 1; j < files.length; j++) {
+        var a1 = files[i], b1 = files[j];
+        var dx = b1.fx - a1.fx, dy = (b1.fy - a1.fy) * 2.4; // widen vertical gaps
+        var d2 = dx * dx + dy * dy + 1;
+        var min = (a1.w2 + b1.w2) / 2 + 60;
+        var f = Math.min(4, (min * min) / d2);
+        var d = Math.sqrt(d2);
+        a1.fx -= dx / d * f; a1.fy -= dy / d * f * 0.6;
+        b1.fx += dx / d * f; b1.fy += dy / d * f * 0.6;
+      }
+      intra.forEach(function (e) {
+        var a2 = byId[e[0]], b2 = byId[e[1]];
+        var dx = b2.fx - a2.fx, dy = b2.fy - a2.fy;
+        var d = Math.sqrt(dx * dx + dy * dy) + 0.01, f = (d - 190) / d * 0.03;
+        a2.fx += dx * f; a2.fy += dy * f; b2.fx -= dx * f; b2.fy -= dy * f;
+      });
+      files.forEach(function (n) {
+        var g = 0.006 + n.deg * 0.004; // hubs gravitate to the star's center
+        n.fx -= n.fx * g; n.fy -= n.fy * g;
+      });
+    }
+    // resolve residual overlaps of padded chip rects
+    for (var p = 0; p < 30; p++) {
+      var moved2 = false;
+      for (var i2 = 0; i2 < files.length; i2++) for (var j2 = i2 + 1; j2 < files.length; j2++) {
+        var A = files[i2], B = files[j2];
+        var ox = (A.w2 + B.w2) / 2 + 26 - Math.abs(A.fx - B.fx);
+        var oy = 26 + 22 - Math.abs(A.fy - B.fy);
+        if (ox > 0 && oy > 0) {
+          moved2 = true;
+          if (ox < oy) { var s = (A.fx < B.fx ? -1 : 1) * ox / 2; A.fx += s; B.fx -= s; }
+          else { var s2 = (A.fy < B.fy ? -1 : 1) * oy / 2; A.fy += s2; B.fy -= s2; }
+        }
+      }
+      if (!moved2) break;
+    }
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    files.forEach(function (n) {
+      minX = Math.min(minX, n.fx - n.w2 / 2); maxX = Math.max(maxX, n.fx + n.w2 / 2);
+      minY = Math.min(minY, n.fy - 13); maxY = Math.max(maxY, n.fy + 13);
+    });
+    var PADB = 30, boxW = maxX - minX + PADB * 2, boxH = maxY - minY + PADB * 2 + 22;
     var box = el('rect', 'clusterbox');
     box.setAttribute('x', 0); box.setAttribute('y', 0); box.setAttribute('width', boxW); box.setAttribute('height', boxH); box.setAttribute('rx', 12);
     var sw = el('rect'); sw.setAttribute('x', 14); sw.setAttribute('y', 10); sw.setAttribute('width', 8); sw.setAttribute('height', 8); sw.setAttribute('rx', 2); sw.setAttribute('fill', colorVar(c));
@@ -363,8 +414,8 @@ export async function generateArchMap(root, liveIndex = null) {
     grow(0, 0, boxW, boxH);
 
     var rect = {};
-    files.forEach(function (n, i) {
-      rect[n.id] = { x: 12 + (i % cols) * cellW, y: 32 + Math.floor(i / cols) * 34, w: nodeW(n), h: 26 };
+    files.forEach(function (n) {
+      rect[n.id] = { x: n.fx - minX + PADB - n.w2 / 2, y: n.fy - minY + PADB + 22 - 13, w: n.w2, h: 26 };
     });
     // collapsed neighbor clusters on the right
     var neighbors = {};
