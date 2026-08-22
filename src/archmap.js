@@ -10,7 +10,9 @@ import path from 'node:path';
 import { Index } from './indexer.js';
 import { buildReverseImports } from './imports.js';
 
-const MAX_FILE_NODES = 400;
+// symbol/call detail travels for the most-imported files only, so the map
+// stays file-level on any repo size without a multi-megabyte payload
+const DETAIL_CAP = 600;
 
 function topDir(relPath) {
   const i = relPath.indexOf('/');
@@ -55,18 +57,24 @@ export async function collectMapData(root, liveIndex = null) {
   const g = index.graph;
   const reverse = buildReverseImports(g); // target -> Set(importers)
 
-  let nodes = [];
-  let edges = []; // [from, to] = importer -> imported
+  const nodes = [];
+  const edges = []; // [from, to] = importer -> imported
   const fileCount = g.files.size;
-  const aggregated = fileCount > MAX_FILE_NODES;
 
-  if (!aggregated) {
-    const clusterOf = computeClusters([...g.files.keys()]);
-    for (const [file, rec] of g.files) {
-      const syms = rec.symbols.filter((s) => !s.parent);
-      // intra-file call pairs between named symbols, for the symbol level
+  const clusterOf = computeClusters([...g.files.keys()]);
+  // rank files by inbound degree; only the top DETAIL_CAP carry symbol detail
+  const detailSet = new Set(
+    [...g.files.keys()]
+      .sort((a, b) => (reverse.get(b)?.size || 0) - (reverse.get(a)?.size || 0))
+      .slice(0, DETAIL_CAP)
+  );
+  for (const [file, rec] of g.files) {
+    const withDetail = detailSet.has(file);
+    const syms = rec.symbols.filter((s) => !s.parent);
+    // intra-file call pairs between named symbols, for the symbol level
+    const callPairs = [];
+    if (withDetail) {
       const names = new Set(rec.symbols.map((s) => s.name));
-      const callPairs = [];
       const seenPair = new Set();
       for (const c of rec.calls) {
         if (c.caller < 0 || !names.has(c.callee)) continue;
@@ -77,55 +85,26 @@ export async function collectMapData(root, liveIndex = null) {
         seenPair.add(key);
         callPairs.push([from, c.callee]);
       }
-      nodes.push({
-        id: file,
-        cluster: clusterOf.get(file) || topDir(file),
-        lang: rec.lang,
-        symbols: rec.symbols.length,
-        top: syms
-          .sort((a, b) => Number(b.exported) - Number(a.exported))
-          .slice(0, 10)
-          .map((s) => `${s.kind} ${s.name}${s.exported ? ' *' : ''}`),
-        syms: rec.symbols
-          .slice(0, 40)
-          .map((s) => ({ n: s.name, k: s.kind, l: s.startLine, e: s.exported ? 1 : 0, p: s.parent || null })),
-        calls: callPairs
-      });
     }
-    for (const [target, importers] of reverse) {
-      for (const imp of importers) edges.push([imp, target]);
-    }
-  } else {
-    const dirOf = (file) => (topDir(file) === '.' ? '.' : file.split('/').slice(0, 2).join('/'));
-    const dirs = new Map();
-    for (const [file, rec] of g.files) {
-      const d = dirOf(file);
-      if (!dirs.has(d)) dirs.set(d, { files: 0, symbols: 0, langs: new Set() });
-      const e = dirs.get(d);
-      e.files++;
-      e.symbols += rec.symbols.length;
-      e.langs.add(rec.lang);
-    }
-    const agg = new Map();
-    for (const [target, importers] of reverse) {
-      for (const imp of importers) {
-        const a = dirOf(imp);
-        const b = dirOf(target);
-        if (a !== b) agg.set(a + ' ' + b, (agg.get(a + ' ' + b) || 0) + 1);
-      }
-    }
-    nodes = [...dirs.entries()].map(([d, e]) => ({
-      id: d,
-      cluster: topDir(d),
-      lang: [...e.langs].join(', '),
-      symbols: e.symbols,
-      top: [`${e.files} files`],
-      syms: [],
-      calls: []
-    }));
-    edges = [...agg.keys()].map((k) => k.split(' '));
+    nodes.push({
+      id: file,
+      cluster: clusterOf.get(file) || topDir(file),
+      lang: rec.lang,
+      symbols: rec.symbols.length,
+      top: syms
+        .sort((a, b) => Number(b.exported) - Number(a.exported))
+        .slice(0, 10)
+        .map((s) => `${s.kind} ${s.name}${s.exported ? ' *' : ''}`),
+      syms: withDetail
+        ? rec.symbols.slice(0, 40).map((s) => ({ n: s.name, k: s.kind, l: s.startLine, e: s.exported ? 1 : 0, p: s.parent || null }))
+        : [],
+      calls: callPairs
+    });
   }
-  return { nodes, edges, aggregated, fileCount, root };
+  for (const [target, importers] of reverse) {
+    for (const imp of importers) edges.push([imp, target]);
+  }
+  return { nodes, edges, fileCount, detailCapped: fileCount > DETAIL_CAP, root };
 }
 
 export async function generateArchMap(root, liveIndex = null) {
@@ -452,7 +431,7 @@ export async function generateArchMap(root, liveIndex = null) {
     if (big && big !== hub) views.push(view(shortName(big.id), '#f=' + big.id, 'largest: ' + big.symbols + ' symbols'));
     setPanel(
       '<h2>' + esc(DATA.root) + '</h2>' +
-      '<p class="meta">' + DATA.fileCount + ' files · ' + edges.length + ' import edges' + (DATA.aggregated ? ' · aggregated (repo over ' + ${MAX_FILE_NODES} + ' files)' : '') + '</p>' +
+      '<p class="meta">' + DATA.fileCount + ' files · ' + edges.length + ' import edges' + '</p>' +
       (layerRows.length > 1
         ? '<h3>Layers (top builds on bottom)</h3><ul>' + layerRows.join('') + '</ul>' +
           (standalone.length ? '<p class="hint">standalone: ' + standalone.map(cName).map(esc).join(', ') + '</p>' : '')
@@ -614,6 +593,13 @@ export async function generateArchMap(root, liveIndex = null) {
     var lb2 = el('text', 'clusterlabel'); lb2.setAttribute('x', midX); lb2.setAttribute('y', 20); lb2.textContent = n.id + ' · ' + n.symbols + ' symbols';
     var symRect = {};
     var symW = 190, symCols = 2;
+    var elided = (!n.syms || n.syms.length === 0) && n.symbols > 0;
+    if (elided) {
+      var note = el('text', 'clusterlabel');
+      note.setAttribute('x', midX); note.setAttribute('y', colY + 14);
+      note.textContent = 'symbol detail elided on this repo size — ask the agent for file_skeleton';
+      grow(midX, colY, 430, 20);
+    }
     (n.syms || []).forEach(function (s, i) {
       var label = truncate((s.p ? s.p + '.' : '') + s.n, 24);
       var x = midX + (i % symCols) * (symW + 46), y = colY + Math.floor(i / symCols) * 34;
@@ -634,7 +620,9 @@ export async function generateArchMap(root, liveIndex = null) {
     setPanel(
       '<h2>' + esc(n.id) + '</h2>' +
       '<p class="meta">' + esc(n.lang) + ' · ' + n.symbols + ' symbols · ' + (n.calls || []).length + ' internal call edges</p>' +
-      '<h3>Kinds</h3><ul>' + Object.keys(kinds).sort().map(function (k) { return '<li>' + esc(k) + ' — ' + kinds[k] + '</li>'; }).join('') + '</ul>' +
+      (elided
+        ? '<p class="hint">Symbol detail is embedded only for the ' + ${DETAIL_CAP} + ' most-imported files on large repos; importers and imports are still complete.</p>'
+        : '<h3>Kinds</h3><ul>' + Object.keys(kinds).sort().map(function (k) { return '<li>' + esc(k) + ' — ' + kinds[k] + '</li>'; }).join('') + '</ul>') +
       '<p class="hint">Chips are symbols (number = line); curved arrows are calls inside this file. Side columns navigate to neighbor files.</p>'
     );
   }

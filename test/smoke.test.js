@@ -309,6 +309,31 @@ test('python src-layout: package imports resolve through the source root', async
   }
 });
 
+test('large repos stay file-level on the map (no directory aggregation)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-large-'));
+  try {
+    for (let a = 0; a < 30; a++) {
+      const appDir = path.join(dir, 'app', 'app' + a);
+      fs.mkdirSync(appDir, { recursive: true });
+      for (let f = 0; f < 15; f++) {
+        const body = f === 0 ? 'class Item:\n    pass\n' : 'from app.app' + a + '.mod0 import Item\n\ndef fn' + f + '():\n    return Item()\n';
+        fs.writeFileSync(path.join(appDir, 'mod' + f + '.py'), body);
+      }
+    }
+    const { collectMapData } = await import('../src/archmap.js');
+    const d = await collectMapData(dir);
+    assert.equal(d.nodes.length, 450, 'every file is a node — no aggregation');
+    assert.ok(d.nodes.every((n) => n.id.endsWith('.py')), 'nodes are files, not directories');
+    const clusters = new Set(d.nodes.map((n) => n.cluster));
+    assert.ok(clusters.has('app/app3'), 'adaptive clusters reach the app level');
+    const hub = d.nodes.find((n) => n.id === 'app/app3/mod0.py');
+    assert.ok(hub.syms.length > 0, 'hub files carry symbol detail');
+    assert.ok(d.edges.some((e) => e[1] === 'app/app3/mod0.py'), 'imports resolve inside apps');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
 test('js extractor captures dynamic import() and require() as imports', async () => {
   const { extractFile } = await import('../src/extract.js');
   const src = "import fs from 'fs';\nasync function load() {\n  const { Index } = await import('../src/indexer.js');\n  const legacy = require('./legacy.js');\n  return new Index(legacy);\n}\n";
