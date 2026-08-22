@@ -172,6 +172,42 @@ test('MCP stdio round-trip: tools list and calls work end-to-end', async () => {
   }
 });
 
+test('gdscript extractor finds funcs, signals, classes and calls', async () => {
+  const { extractFile } = await import('../src/extract.js');
+  const src = [
+    'extends CharacterBody2D',
+    'class_name Player',
+    '',
+    'signal died(cause)',
+    '@export var speed := 300.0',
+    'var _health = 100',
+    '',
+    'func _ready():',
+    '\tconnect_signals()',
+    '',
+    'func take_damage(amount):',
+    '\t_health -= amount',
+    '\tif _health <= 0:',
+    '\t\tdied.emit("hp")',
+    '',
+    'class Inventory:',
+    '\tfunc add_item(item):',
+    '\t\tpass',
+    ''
+  ].join('\n');
+  const r = await extractFile('gdscript', src);
+  const byName = Object.fromEntries(r.symbols.map((s) => [s.name, s]));
+  assert.equal(byName.Player.kind, 'class');
+  assert.equal(byName.died.kind, 'signal');
+  assert.equal(byName.speed.kind, 'var');
+  assert.equal(byName.take_damage.kind, 'function');
+  assert.equal(byName.take_damage.endLine, 14, 'indentation block extent');
+  assert.equal(byName.add_item.parent, 'Inventory');
+  assert.ok(r.calls.some((c) => c.callee === 'connect_signals'), 'call edge found');
+  assert.ok(r.imports.includes('extends CharacterBody2D'));
+  assert.equal(byName._health.exported, false);
+});
+
 test('dashboard renders usage stats and central files', async () => {
   const { generateDashboard } = await import('../src/dashboard.js');
   const html = await generateDashboard(fixtureDir);

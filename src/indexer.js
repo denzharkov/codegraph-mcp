@@ -32,7 +32,8 @@ export class Index {
     if (!force && now - this.lastRefresh < REFRESH_INTERVAL_MS) return { parsed: 0, removed: 0 };
     this.lastRefresh = now;
 
-    const found = walkRepo(this.root);
+    const { files: found, unsupported } = walkRepo(this.root);
+    this.unsupported = unsupported;
     const foundSet = new Set(found.map((f) => f.relPath));
     let removed = 0;
     for (const relPath of [...this.graph.files.keys()]) {

@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { EXT_TO_LANG } from './languages.js';
+import { REGEX_EXTS } from './regexlangs.js';
 
 const DEFAULT_IGNORED_DIRS = new Set([
   'node_modules', '.git', '.hg', '.svn', 'dist', 'build', 'out', 'target',
@@ -15,34 +16,41 @@ const MAX_FILE_SIZE = 1_200_000;
 const MAX_FILES = 20_000;
 
 function loadGitignore(root) {
-  const patterns = [];
+  const rules = [];
   try {
     const text = fs.readFileSync(path.join(root, '.gitignore'), 'utf8');
     for (let line of text.split('\n')) {
       line = line.trim();
-      if (!line || line.startsWith('#') || line.startsWith('!')) continue;
-      patterns.push(line);
+      if (!line || line.startsWith('#')) continue;
+      const neg = line.startsWith('!');
+      rules.push({ neg, pat: (neg ? line.slice(1) : line).replace(/\/$/, '') });
     }
   } catch {
     // no .gitignore — fine
   }
-  return patterns;
+  return rules;
 }
 
-function matchesGitignore(relPath, name, isDir, patterns) {
-  for (const p of patterns) {
-    const pat = p.replace(/\/$/, '');
-    if (pat.includes('*')) {
-      // glob on basename only: *.log, *.min.js
-      const re = new RegExp('^' + pat.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$');
-      if (re.test(name)) return true;
-    } else if (pat.startsWith('/')) {
-      if (relPath === pat.slice(1) || relPath.startsWith(pat.slice(1) + '/')) return true;
-    } else if (name === pat || relPath === pat || relPath.endsWith('/' + pat)) {
-      return true;
-    }
+function ruleMatches(pat, relPath, name) {
+  if (pat.includes('*')) {
+    const re = new RegExp('^' + pat.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*') + '$');
+    // path-shaped globs match the rel path, bare globs the basename
+    return pat.includes('/') ? re.test(relPath) || re.test(relPath.replace(/^\//, '')) : re.test(name);
   }
-  return false;
+  if (pat.startsWith('/')) {
+    return relPath === pat.slice(1) || relPath.startsWith(pat.slice(1) + '/');
+  }
+  return name === pat || relPath === pat || relPath.endsWith('/' + pat);
+}
+
+// git semantics: rules are evaluated in order, the LAST matching rule wins —
+// this is what makes "ignore all, un-ignore some" (`*` then `!src`) work
+function matchesGitignore(relPath, name, isDir, rules) {
+  let ignored = false;
+  for (const { neg, pat } of rules) {
+    if (ruleMatches(pat, relPath, name)) ignored = !neg;
+  }
+  return ignored;
 }
 
 function looksMinified(filePath, size) {
@@ -64,10 +72,15 @@ function looksMinified(filePath, size) {
   }
 }
 
-/** Returns [{path, relPath, lang, size, mtimeMs}] for indexable source files. */
+/**
+ * Returns {files: [{path, relPath, lang, size, mtimeMs}], unsupported: {ext: count}}.
+ * `unsupported` counts source-looking files whose extension has no extractor —
+ * surfaced in repo_map so an empty index explains itself.
+ */
 export function walkRepo(root) {
   const gitignore = loadGitignore(root);
   const results = [];
+  const unsupported = {};
   const queue = [''];
 
   while (queue.length > 0 && results.length < MAX_FILES) {
@@ -89,9 +102,12 @@ export function walkRepo(root) {
         queue.push(childRel);
       } else if (entry.isFile()) {
         const ext = path.extname(name).toLowerCase();
-        const lang = EXT_TO_LANG[ext];
-        if (!lang) continue;
+        const lang = EXT_TO_LANG[ext] || REGEX_EXTS[ext];
         if (matchesGitignore(childRel, name, false, gitignore)) continue;
+        if (!lang) {
+          if (ext && ext.length <= 12) unsupported[ext] = (unsupported[ext] || 0) + 1;
+          continue;
+        }
         let stat;
         try {
           stat = fs.statSync(path.join(abs, name));
@@ -110,5 +126,5 @@ export function walkRepo(root) {
       }
     }
   }
-  return results;
+  return { files: results, unsupported };
 }

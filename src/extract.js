@@ -1,6 +1,7 @@
 // Walks a parsed tree once, producing symbols, call edges and imports.
 import { LANGUAGES } from './languages.js';
 import { getLanguage, parseWith } from './parsers.js';
+import { REGEX_LANGS } from './regexlangs.js';
 
 const MAX_NODES = 400_000;
 
@@ -15,6 +16,7 @@ function signatureOf(node, src) {
 }
 
 export async function extractFile(langId, src) {
+  if (REGEX_LANGS[langId]) return REGEX_LANGS[langId](src);
   const lang = LANGUAGES[langId];
   if (!lang) return null;
   const language = await getLanguage(lang.grammar);

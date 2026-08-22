@@ -32,7 +32,7 @@ export async function createServer(root) {
   // Usage guidance ships with the server via MCP `instructions` — the client
   // (Claude Code) injects it automatically, so users need zero configuration.
   const server = new McpServer(
-    { name: 'codegraph', version: '0.5.0' },
+    { name: 'codegraph', version: '0.5.1' },
     {
       instructions: [
         'This server maintains a pre-built symbol graph of the repository. Prefer its tools over raw file reads and grep:',
@@ -77,9 +77,16 @@ export async function createServer(root) {
       const lines = [
         `Repo: ${root}`,
         `Files indexed: ${stats.files}, symbols: ${stats.symbols}, call edges: ${stats.calls}`,
-        `Languages: ${Object.entries(stats.byLang).map(([l, n]) => `${l} (${n})`).join(', ') || 'none'}`,
-        ''
+        `Languages: ${Object.entries(stats.byLang).map(([l, n]) => `${l} (${n})`).join(', ') || 'none'}`
       ];
+      const unsupported = Object.entries(index.unsupported || {}).sort((a, b) => b[1] - a[1]);
+      if (unsupported.length > 0) {
+        lines.push(
+          `Not indexed (no extractor for extension): ${unsupported.slice(0, 8).map(([e, n]) => `${e} (${n})`).join(', ')}` +
+            (stats.files === 0 ? ' — use Glob/Read for these files' : '')
+        );
+      }
+      lines.push('');
       const reverse = buildReverseImports(g);
       const ranked = [...g.files.entries()]
         .map(([file, rec]) => ({
