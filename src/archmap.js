@@ -336,69 +336,25 @@ export async function generateArchMap(root, liveIndex = null) {
   }
   function truncate(s, n) { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
 
-  // ---- level 1: overview ----
-  function buildOverview() {
-    var cards = clusterNames.map(function (c) {
-      var files = clusterFiles(c);
-      var syms = files.reduce(function (s, n) { return s + n.symbols; }, 0);
-      var tops = files.slice().sort(function (a, b) { return b.deg - a.deg; }).slice(0, 3).map(function (n) { return shortName(n.id); });
-      return { c: c, files: files.length, syms: syms, tops: tops, w: 216, h: 100 };
-    });
-    var perRow = Math.max(2, Math.ceil(Math.sqrt(cards.length)));
-    cards.forEach(function (k, i) {
-      k.x = (i % perRow) * (k.w + 70);
-      k.y = Math.floor(i / perRow) * (k.h + 90);
-    });
-    var rects = {};
-    cards.forEach(function (k) { rects[k.c] = { x: k.x, y: k.y, w: k.w, h: k.h }; });
-    var labels = [];
-    Object.keys(cAgg).forEach(function (key) {
-      var parts = key.split('\\u0000');
-      if (!rects[parts[0]] || !rects[parts[1]]) return;
-      var w = cAgg[key];
-      // opposite-direction pairs bow to opposite sides so they don't merge
-      var hasReverse = cAgg[parts[1] + '\\u0000' + parts[0]] != null;
-      var sign = hasReverse ? (parts[0] < parts[1] ? 1 : -1) : 1;
-      var r = curve(rects[parts[0]], rects[parts[1]], {
-        cls: w > 6 ? 'w3' : w > 2 ? 'w2' : '',
-        label: w + (w === 1 ? ' import' : ' imports'),
-        labelT: 0.35,
-        bend: sign
-      });
-      labels.push(r.labelEl);
-    });
-    spreadLabels(labels);
-    // re-append labels after the cards render so they stay on top
-    setTimeout(function () { labels.filter(Boolean).forEach(function (l) { scene.appendChild(l); }); }, 0);
-    cards.forEach(function (k) {
-      var g = el('g', 'bigcard');
-      var body = el('rect', 'body', g);
-      body.setAttribute('x', k.x); body.setAttribute('y', k.y); body.setAttribute('width', k.w); body.setAttribute('height', k.h); body.setAttribute('rx', 12);
-      var acc = el('rect', null, g);
-      acc.setAttribute('x', k.x + 16); acc.setAttribute('y', k.y + 16); acc.setAttribute('width', 9); acc.setAttribute('height', 9); acc.setAttribute('rx', 2);
-      acc.setAttribute('fill', colorVar(k.c));
-      var title = el('text', 'title', g);
-      title.setAttribute('x', k.x + 32); title.setAttribute('y', k.y + 25); title.textContent = cName(k.c);
-      var sub = el('text', 'sub', g);
-      sub.setAttribute('x', k.x + 16); sub.setAttribute('y', k.y + 47); sub.textContent = k.files + ' files · ' + k.syms + ' symbols';
-      var mini = el('text', 'mini', g);
-      mini.setAttribute('x', k.x + 16); mini.setAttribute('y', k.y + 66); mini.textContent = truncate(k.tops.join(', '), 34);
-      var open = el('text', 'mini', g);
-      open.setAttribute('x', k.x + 16); open.setAttribute('y', k.y + 85); open.textContent = 'open \\u2192';
-      g.addEventListener('click', function (ev) { ev.stopPropagation(); if (!moved) location.hash = '#c=' + encodeURIComponent(k.c); });
-      grow(k.x, k.y, k.w, k.h);
-    });
-    // layering narrative: depth = longest chain of "imports" below a cluster,
-    // so foundations sit at layer 1 and entry-facing code on top
+  // ---- directory view: one recursive renderer for every level ----
+  // At any path it shows the IMMEDIATE children: subdirectory cards with
+  // aggregated stats/edges plus the files that live right here. Arbitrary
+  // nesting (app/esum/sub/...) keeps its shape instead of flattening.
+  function hash(s) { var h = 2166136261; for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0) / 4294967296; }
+  function dirnameOf(id) { var i = id.lastIndexOf('/'); return i === -1 ? '' : id.slice(0, i); }
+  function dirExists(prefix) {
+    return nodes.some(function (n) { return dirnameOf(n.id) === prefix || n.id.indexOf(prefix + '/') === 0; });
+  }
+  function layersPanelHtml() {
     var cOut = {};
     Object.keys(cAgg).forEach(function (key) {
-      var parts = key.split('\\u0000');
+      var parts = key.split(' ');
       (cOut[parts[0]] = cOut[parts[0]] || []).push(parts[1]);
     });
     var depthMemo = {};
     function cDepth(c, trail) {
       if (depthMemo[c] != null) return depthMemo[c];
-      if (trail[c]) return 1; // cycle guard
+      if (trail[c]) return 1;
       trail[c] = 1;
       var best = 1;
       (cOut[c] || []).forEach(function (t) { best = Math.max(best, 1 + cDepth(t, trail)); });
@@ -407,17 +363,20 @@ export async function generateArchMap(root, liveIndex = null) {
       return best;
     }
     var layered = {};
-    var connected = clusterNames.filter(function (c) { return cOut[c] || Object.keys(cAgg).some(function (k) { return k.split('\\u0000')[1] === c; }); });
+    var connected = clusterNames.filter(function (c) { return cOut[c] || Object.keys(cAgg).some(function (k) { return k.split(' ')[1] === c; }); });
     connected.forEach(function (c) { var d = cDepth(c, {}); (layered[d] = layered[d] || []).push(c); });
     var layerRows = Object.keys(layered).map(Number).sort(function (a, b) { return b - a; }).map(function (d) {
       var names = layered[d].map(function (c) {
-        return '<span class="link" data-nav="#c=' + esc(c) + '">' + esc(cName(c)) + '</span>';
+        return '<span class="link" data-nav="#d=' + esc(c) + '">' + esc(cName(c)) + '</span>';
       }).join(', ');
       return '<li>' + names + '</li>';
     });
     var standalone = clusterNames.filter(function (c) { return connected.indexOf(c) < 0; });
-
-    // panel: project summary + derived guided views
+    if (layerRows.length < 2) return '';
+    return '<h3>Layers (top builds on bottom)</h3><ul>' + layerRows.join('') + '</ul>' +
+      (standalone.length ? '<p class="hint">standalone: ' + standalone.map(cName).map(esc).join(', ') + '</p>' : '');
+  }
+  function startHereHtml() {
     var hub = nodes.slice().sort(function (a, b) { return b.deg - a.deg; })[0];
     var entry = nodes.filter(function (n) { return n.deg === 0 && (outb[n.id] || []).length > 0; })
       .sort(function (a, b) { return (outb[b.id] || []).length - (outb[a.id] || []).length; })[0];
@@ -429,140 +388,260 @@ export async function generateArchMap(root, liveIndex = null) {
     if (hub && hub.deg > 0) views.push(view(shortName(hub.id), '#f=' + hub.id, 'hub: imported by ' + hub.deg + ' files'));
     if (entry) views.push(view(shortName(entry.id), '#f=' + entry.id, 'entry point: imports ' + (outb[entry.id] || []).length + ', imported by none'));
     if (big && big !== hub) views.push(view(shortName(big.id), '#f=' + big.id, 'largest: ' + big.symbols + ' symbols'));
-    setPanel(
-      '<h2>' + esc(DATA.root) + '</h2>' +
-      '<p class="meta">' + DATA.fileCount + ' files · ' + edges.length + ' import edges' + '</p>' +
-      (layerRows.length > 1
-        ? '<h3>Layers (top builds on bottom)</h3><ul>' + layerRows.join('') + '</ul>' +
-          (standalone.length ? '<p class="hint">standalone: ' + standalone.map(cName).map(esc).join(', ') + '</p>' : '')
-        : '') +
-      '<h3>Start here</h3><ul>' + (views.join('') || '<li class="hint">no import edges resolved</li>') + '</ul>' +
-      '<h3>How to read</h3><p class="hint">Cards are subsystems; edge labels count imports between them. Click a card to open its files, click a file twice to open its symbols. Search <span class="kbd">/</span> · back <span class="kbd">Esc</span>.</p>'
-    );
+    return '<h3>Start here</h3><ul>' + (views.join('') || '<li class="hint">no import edges resolved</li>') + '</ul>';
   }
 
-  // ---- level 2: one cluster (star layout: hubs center, leaves spread) ----
-  function hash(s) { var h = 2166136261; for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0) / 4294967296; }
-  function buildCluster(c) {
-    var files = clusterFiles(c);
-    if (files.length === 0) { location.hash = ''; return; }
-    files.sort(function (a, b) { return b.deg - a.deg || b.symbols - a.symbols; });
-    var nodeW = function (n) { return Math.max(64, Math.min(190, truncate(shortName(n.id), 24).length * 6.6 + 34)); };
-    var intra = edges.filter(function (e) { return byId[e[0]].cluster === c && byId[e[1]].cluster === c; });
-
-    // deterministic force layout: seeded ring start, spring edges, padded
-    // repulsion so chips keep clear air between them
-    var R = 80 + files.length * 16;
-    files.forEach(function (n, i) {
-      var a = (i / files.length) * 6.283 + hash(n.id) * 0.8;
-      var r = R * (0.35 + 0.65 * hash(n.id + 'r'));
-      n.fx = Math.cos(a) * r; n.fy = Math.sin(a) * r; n.w2 = nodeW(n);
+  function buildDir(prefix) {
+    if (prefix && !dirExists(prefix)) { location.hash = ''; return; }
+    // ---- collect immediate children ----
+    var files = [];
+    var dirs = {};
+    nodes.forEach(function (n) {
+      if (prefix && n.id.indexOf(prefix + '/') !== 0) { if (dirnameOf(n.id) !== prefix) return; }
+      var rest = prefix ? n.id.slice(prefix.length + 1) : n.id;
+      if (prefix && dirnameOf(n.id) === prefix) { files.push(n); return; }
+      var i = rest.indexOf('/');
+      if (i === -1) { if (!prefix) files.push(n); return; }
+      var seg = rest.slice(0, i);
+      var d = dirs[seg] = dirs[seg] || { seg: seg, path: prefix ? prefix + '/' + seg : seg, files: 0, symbols: 0 };
+      d.files++;
+      d.symbols += n.symbols;
     });
-    var iters = files.length > 120 ? 90 : 240;
+    var dirList = Object.keys(dirs).sort().map(function (k) { return dirs[k]; });
+    // skip-through wrapper folders: a dir with no files and a single child
+    // collapses into one card ('src' becomes 'src/announcement_bot')
+    function immediateOf(pref) {
+      var fcount = 0, segs = {};
+      nodes.forEach(function (n) {
+        if (n.id.indexOf(pref + '/') !== 0 && dirnameOf(n.id) !== pref) return;
+        if (dirnameOf(n.id) === pref) { fcount++; return; }
+        var rest = n.id.slice(pref.length + 1);
+        segs[rest.slice(0, rest.indexOf('/'))] = 1;
+      });
+      return { files: fcount, segs: Object.keys(segs) };
+    }
+    dirList.forEach(function (d) {
+      d.label = d.seg;
+      for (var guard = 0; guard < 4; guard++) {
+        var im = immediateOf(d.path);
+        if (im.files === 0 && im.segs.length === 1) {
+          d.path = d.path + '/' + im.segs[0];
+          d.label = d.label + '/' + im.segs[0];
+        } else break;
+      }
+    });
+    var inside = prefix + '/';
+    var accent = function (i) { return 'var(--c' + (i < 8 ? i + 1 : 0) + ')'; };
+    // stable color slot per child, by sorted child name
+    var childNames = dirList.map(function (d) { return d.seg; }).concat(files.map(function (n) { return shortName(n.id); })).sort();
+    var slotOf = function (name) { var i = childNames.indexOf(name); return accent(i >= 0 ? i % 9 : 8); };
+
+    // ---- representative for any file id in this view ----
+    function rep(id) {
+      if (!prefix || id.indexOf(inside) === 0 || dirnameOf(id) === prefix) {
+        if (dirnameOf(id) === prefix || (!prefix && id.indexOf('/') === -1)) return 'f:' + id;
+        var rest = prefix ? id.slice(prefix.length + 1) : id;
+        return 'd:' + rest.slice(0, rest.indexOf('/'));
+      }
+      return 'x:' + (byId[id] ? byId[id].cluster : '?');
+    }
+
+    // ---- items with sizes for the force layout ----
+    var items = [];
+    files.forEach(function (n) {
+      items.push({ key: 'f:' + n.id, kind: 'file', node: n, label: truncate(shortName(n.id), 24), h: 26,
+        w: Math.max(64, Math.min(190, truncate(shortName(n.id), 24).length * 6.6 + 34)), deg: n.deg });
+    });
+    dirList.forEach(function (d) {
+      items.push({ key: 'd:' + d.seg, kind: 'dir', dir: d, label: d.seg, h: 62, w: 184, deg: d.files });
+    });
+    var byKey = {}; items.forEach(function (it) { byKey[it.key] = it; });
+
+    // ---- aggregate edges to view representatives ----
+    var agg = {};
+    edges.forEach(function (e) {
+      var a = rep(e[0]), b = rep(e[1]);
+      if (a === b) return;
+      var k = a + '' + b;
+      (agg[k] = agg[k] || { from: a, to: b, weight: 0, orig: [] });
+      agg[k].weight++;
+      if (agg[k].orig.length < 400) agg[k].orig.push(e);
+    });
+
+    // externals present in aggregated edges
+    var extKeys = {};
+    Object.keys(agg).forEach(function (k) {
+      [agg[k].from, agg[k].to].forEach(function (r) { if (r.indexOf('x:') === 0) extKeys[r.slice(2)] = 1; });
+    });
+
+    // ---- force layout over files + dir cards ----
+    var sim = items;
+    var R = 90 + sim.length * 14;
+    sim.forEach(function (it, i) {
+      var a = (i / Math.max(sim.length, 1)) * 6.283 + hash(it.key) * 0.8;
+      var r = R * (0.35 + 0.65 * hash(it.key + 'r'));
+      it.fx = Math.cos(a) * r; it.fy = Math.sin(a) * r;
+    });
+    var springPairs = [];
+    Object.keys(agg).forEach(function (k) {
+      var a = agg[k];
+      if (byKey[a.from] && byKey[a.to]) springPairs.push([byKey[a.from], byKey[a.to]]);
+    });
+    var iters = sim.length > 120 ? 90 : 240;
     for (var t = 0; t < iters; t++) {
-      for (var i = 0; i < files.length; i++) for (var j = i + 1; j < files.length; j++) {
-        var a1 = files[i], b1 = files[j];
-        var dx = b1.fx - a1.fx, dy = (b1.fy - a1.fy) * 2.4; // widen vertical gaps
+      for (var i = 0; i < sim.length; i++) for (var j = i + 1; j < sim.length; j++) {
+        var A = sim[i], B = sim[j];
+        var dx = B.fx - A.fx, dy = (B.fy - A.fy) * 2.0;
         var d2 = dx * dx + dy * dy + 1;
-        var min = (a1.w2 + b1.w2) / 2 + 60;
+        var min = (A.w + B.w) / 2 + 60;
         var f = Math.min(4, (min * min) / d2);
         var d = Math.sqrt(d2);
-        a1.fx -= dx / d * f; a1.fy -= dy / d * f * 0.6;
-        b1.fx += dx / d * f; b1.fy += dy / d * f * 0.6;
+        A.fx -= dx / d * f; A.fy -= dy / d * f * 0.6;
+        B.fx += dx / d * f; B.fy += dy / d * f * 0.6;
       }
-      intra.forEach(function (e) {
-        var a2 = byId[e[0]], b2 = byId[e[1]];
-        var dx = b2.fx - a2.fx, dy = b2.fy - a2.fy;
-        var d = Math.sqrt(dx * dx + dy * dy) + 0.01, f = (d - 190) / d * 0.03;
-        a2.fx += dx * f; a2.fy += dy * f; b2.fx -= dx * f; b2.fy -= dy * f;
+      springPairs.forEach(function (p) {
+        var dx = p[1].fx - p[0].fx, dy = p[1].fy - p[0].fy;
+        var d = Math.sqrt(dx * dx + dy * dy) + 0.01, f = (d - 210) / d * 0.03;
+        p[0].fx += dx * f; p[0].fy += dy * f; p[1].fx -= dx * f; p[1].fy -= dy * f;
       });
-      files.forEach(function (n) {
-        var g = 0.006 + n.deg * 0.004; // hubs gravitate to the star's center
-        n.fx -= n.fx * g; n.fy -= n.fy * g;
+      sim.forEach(function (it) {
+        var g = 0.006 + it.deg * 0.003;
+        it.fx -= it.fx * g; it.fy -= it.fy * g;
       });
     }
-    // resolve residual overlaps of padded chip rects
-    for (var p = 0; p < 30; p++) {
-      var moved2 = false;
-      for (var i2 = 0; i2 < files.length; i2++) for (var j2 = i2 + 1; j2 < files.length; j2++) {
-        var A = files[i2], B = files[j2];
-        var ox = (A.w2 + B.w2) / 2 + 26 - Math.abs(A.fx - B.fx);
-        var oy = 26 + 22 - Math.abs(A.fy - B.fy);
+    for (var p2 = 0; p2 < 30; p2++) {
+      var bumped = false;
+      for (var i2 = 0; i2 < sim.length; i2++) for (var j2 = i2 + 1; j2 < sim.length; j2++) {
+        var A2 = sim[i2], B2 = sim[j2];
+        var ox = (A2.w + B2.w) / 2 + 26 - Math.abs(A2.fx - B2.fx);
+        var oy = (A2.h + B2.h) / 2 + 20 - Math.abs(A2.fy - B2.fy);
         if (ox > 0 && oy > 0) {
-          moved2 = true;
-          if (ox < oy) { var s = (A.fx < B.fx ? -1 : 1) * ox / 2; A.fx += s; B.fx -= s; }
-          else { var s2 = (A.fy < B.fy ? -1 : 1) * oy / 2; A.fy += s2; B.fy -= s2; }
+          bumped = true;
+          if (ox < oy) { var s = (A2.fx < B2.fx ? -1 : 1) * ox / 2; A2.fx += s; B2.fx -= s; }
+          else { var s2 = (A2.fy < B2.fy ? -1 : 1) * oy / 2; A2.fy += s2; B2.fy -= s2; }
         }
       }
-      if (!moved2) break;
+      if (!bumped) break;
     }
     var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    files.forEach(function (n) {
-      minX = Math.min(minX, n.fx - n.w2 / 2); maxX = Math.max(maxX, n.fx + n.w2 / 2);
-      minY = Math.min(minY, n.fy - 13); maxY = Math.max(maxY, n.fy + 13);
+    sim.forEach(function (it) {
+      minX = Math.min(minX, it.fx - it.w / 2); maxX = Math.max(maxX, it.fx + it.w / 2);
+      minY = Math.min(minY, it.fy - it.h / 2); maxY = Math.max(maxY, it.fy + it.h / 2);
     });
-    var PADB = 30, boxW = maxX - minX + PADB * 2, boxH = maxY - minY + PADB * 2 + 22;
-    var box = el('rect', 'clusterbox');
-    box.setAttribute('x', 0); box.setAttribute('y', 0); box.setAttribute('width', boxW); box.setAttribute('height', boxH); box.setAttribute('rx', 12);
-    var sw = el('rect'); sw.setAttribute('x', 14); sw.setAttribute('y', 10); sw.setAttribute('width', 8); sw.setAttribute('height', 8); sw.setAttribute('rx', 2); sw.setAttribute('fill', colorVar(c));
-    var lbl = el('text', 'clusterlabel'); lbl.setAttribute('x', 28); lbl.setAttribute('y', 18); lbl.textContent = cName(c) + ' · ' + files.length;
-    grow(0, 0, boxW, boxH);
-
+    if (!isFinite(minX)) { minX = 0; minY = 0; maxX = 200; maxY = 100; }
+    var PADB = 30, header = prefix ? 24 : 0;
+    var boxW = maxX - minX + PADB * 2, boxH = maxY - minY + PADB * 2 + header;
+    if (prefix) {
+      var box = el('rect', 'clusterbox');
+      box.setAttribute('x', 0); box.setAttribute('y', 0); box.setAttribute('width', boxW); box.setAttribute('height', boxH); box.setAttribute('rx', 12);
+      var lbl = el('text', 'clusterlabel'); lbl.setAttribute('x', 14); lbl.setAttribute('y', 18);
+      lbl.textContent = prefix + ' · ' + files.length + ' files · ' + dirList.length + ' dirs';
+      grow(0, 0, boxW, boxH);
+    }
     var rect = {};
-    files.forEach(function (n) {
-      rect[n.id] = { x: n.fx - minX + PADB - n.w2 / 2, y: n.fy - minY + PADB + 22 - 13, w: n.w2, h: 26 };
+    sim.forEach(function (it) {
+      rect[it.key] = { x: it.fx - minX + PADB - it.w / 2, y: it.fy - minY + PADB + header - it.h / 2, w: it.w, h: it.h };
     });
-    // collapsed neighbor clusters on the right
-    var neighbors = {};
-    edges.forEach(function (e) {
-      var a = byId[e[0]], b = byId[e[1]];
-      if (a.cluster === c && b.cluster !== c) neighbors[b.cluster] = 1;
-      if (b.cluster === c && a.cluster !== c) neighbors[a.cluster] = 1;
-    });
+    // external clusters in a right-hand column
     var nx = boxW + 90, ny = 10;
-    Object.keys(neighbors).sort().forEach(function (nc) {
-      rect['\\u0000' + nc] = { x: nx, y: ny, w: 150, h: 26 };
-      chip(nx, ny, 150, cName(nc), clusterFiles(nc).length, colorVar(nc), function () { location.hash = '#c=' + encodeURIComponent(nc); }, 'open ' + cName(nc));
+    Object.keys(extKeys).sort().forEach(function (c) {
+      rect['x:' + c] = { x: nx, y: ny, w: 160, h: 26 };
+      chip(nx, ny, 160, truncate(cName(c), 22), clusterFiles(c).length, colorVar(c), function () { location.hash = '#d=' + encodeURIComponent(c); }, 'open ' + c);
       ny += 40;
     });
-    // edges: intra-cluster file->file, cross aggregated to neighbor chips
-    var crossSeen = {};
+
+    // ---- draw edges then items ----
     var edgeRefs = [];
-    edges.forEach(function (e) {
-      var a = byId[e[0]], b = byId[e[1]];
-      var ra = a.cluster === c ? rect[a.id] : rect['\\u0000' + a.cluster];
-      var rb = b.cluster === c ? rect[b.id] : rect['\\u0000' + b.cluster];
+    var labels = [];
+    Object.keys(agg).forEach(function (k) {
+      var a = agg[k];
+      var ra = rect[a.from], rb = rect[a.to];
       if (!ra || !rb) return;
-      if (a.cluster !== c || b.cluster !== c) {
-        var k = (a.cluster === c ? a.id : '\\u0000' + a.cluster) + '>' + (b.cluster === c ? b.id : '\\u0000' + b.cluster);
-        if (crossSeen[k]) return;
-        crossSeen[k] = 1;
-      }
-      edgeRefs.push({ e: e, path: curve(ra, rb, { bend: a.cluster === c && b.cluster === c ? 0.5 : 1 }).path });
+      var hasReverse = agg[a.to + '' + a.from] != null;
+      var sign = hasReverse ? (a.from < a.to ? 1 : -1) : 1;
+      var r = curve(ra, rb, {
+        cls: a.weight > 6 ? 'w3' : a.weight > 2 ? 'w2' : '',
+        label: a.weight > 1 ? String(a.weight) : null,
+        labelT: 0.35,
+        bend: sign * (a.from.indexOf('f:') === 0 && a.to.indexOf('f:') === 0 ? 0.5 : 1)
+      });
+      labels.push(r.labelEl);
+      edgeRefs.push({ orig: a.orig, path: r.path });
     });
+    spreadLabels(labels);
+    setTimeout(function () { labels.filter(Boolean).forEach(function (l) { scene.appendChild(l); }); }, 0);
+
     var chips = {};
     files.forEach(function (n) {
-      var r = rect[n.id];
-      chips[n.id] = chip(r.x, r.y, r.w, truncate(shortName(n.id), 24), n.symbols, colorVar(c), function () {
+      var r = rect['f:' + n.id];
+      chips['f:' + n.id] = chip(r.x, r.y, r.w, truncate(shortName(n.id), 24), n.symbols, slotOf(shortName(n.id)), function () {
         if (selected === n.id) { location.hash = '#f=' + n.id; return; }
-        selectFile(n, chips, edgeRefs);
+        selectInDir(n, chips, edgeRefs, prefix);
       }, n.id);
     });
-    setPanel(
-      '<h2>' + esc(cName(c)) + '</h2>' +
-      '<p class="meta">' + files.length + ' files · ' + files.reduce(function (s, n) { return s + n.symbols; }, 0) + ' symbols</p>' +
-      '<p class="hint">Click a file to trace its imports; click it again to open its symbols. Right-hand chips are neighbor subsystems.</p>'
-    );
+    dirList.forEach(function (d) {
+      var r = rect['d:' + d.seg];
+      var g = el('g', 'bigcard');
+      var body = el('rect', 'body', g);
+      body.setAttribute('x', r.x); body.setAttribute('y', r.y); body.setAttribute('width', r.w); body.setAttribute('height', r.h); body.setAttribute('rx', 10);
+      var acc = el('rect', null, g);
+      acc.setAttribute('x', r.x + 12); acc.setAttribute('y', r.y + 12); acc.setAttribute('width', 8); acc.setAttribute('height', 8); acc.setAttribute('rx', 2);
+      acc.setAttribute('fill', slotOf(d.seg));
+      var title = el('text', 'title', g);
+      title.setAttribute('x', r.x + 26); title.setAttribute('y', r.y + 20); title.textContent = truncate(d.label || d.seg, 22);
+      var sub = el('text', 'sub', g);
+      sub.setAttribute('x', r.x + 12); sub.setAttribute('y', r.y + 39); sub.textContent = d.files + ' files · ' + d.symbols + ' symbols';
+      var open = el('text', 'mini', g);
+      open.setAttribute('x', r.x + 12); open.setAttribute('y', r.y + 54); open.textContent = 'open →';
+      var tt = el('title', null, g); tt.textContent = d.path;
+      g.addEventListener('click', function (ev) { ev.stopPropagation(); if (!moved) location.hash = '#d=' + encodeURIComponent(d.path); });
+      chips['d:' + d.seg] = g;
+      grow(r.x, r.y, r.w, r.h);
+    });
+
+    // ---- panel ----
+    var dirRows = dirList.map(function (d) {
+      return '<li class="link" data-nav="#d=' + esc(d.path) + '">' + esc(d.label || d.seg) + ' — ' + d.files + ' files</li>';
+    }).join('');
+    if (!prefix) {
+      setPanel(
+        '<h2>' + esc(DATA.root) + '</h2>' +
+        '<p class="meta">' + DATA.fileCount + ' files · ' + edges.length + ' import edges</p>' +
+        layersPanelHtml() +
+        startHereHtml() +
+        '<h3>How to read</h3><p class="hint">Cards are folders (numbers count imports between them), chips are files at this level. Click a folder to descend — any depth. Click a file to trace, twice to open symbols. Search <span class="kbd">/</span> · up <span class="kbd">Esc</span>.</p>'
+      );
+    } else {
+      setPanel(
+        '<h2>' + esc(prefix) + '</h2>' +
+        '<p class="meta">' + files.length + ' files here · ' + dirList.length + ' subfolders</p>' +
+        (dirRows ? '<h3>Subfolders</h3><ul>' + dirRows + '</ul>' : '') +
+        '<p class="hint">Click a file to trace its imports; click it again to open its symbols. Right-hand chips lead outside this folder.</p>'
+      );
+    }
   }
-  function selectFile(n, chips, edgeRefs) {
+  function selectInDir(n, chips, edgeRefs, prefix) {
     selected = n.id;
     var up = reach(n.id, inb), down = reach(n.id, outb);
-    Object.keys(chips).forEach(function (id) {
-      chips[id].setAttribute('class', 'node' + (id === n.id ? ' sel' : (up[id] || down[id]) ? '' : ' dim'));
+    var subtreeHits = function (dirPath) {
+      var p = dirPath + '/';
+      return Object.keys(up).concat(Object.keys(down)).some(function (id) { return id.indexOf(p) === 0; });
+    };
+    Object.keys(chips).forEach(function (key) {
+      if (key.indexOf('f:') === 0) {
+        var id = key.slice(2);
+        chips[key].setAttribute('class', 'node' + (id === n.id ? ' sel' : (up[id] || down[id]) ? '' : ' dim'));
+      } else if (key.indexOf('d:') === 0) {
+        var dirPath = (prefix ? prefix + '/' : '') + key.slice(2);
+        chips[key].setAttribute('class', 'bigcard' + (subtreeHits(dirPath) ? '' : ' dim'));
+      }
     });
     edgeRefs.forEach(function (er) {
-      var isUp = er.e[1] === n.id || (reachAll && up[er.e[1]] && up[er.e[0]]);
-      var isDown = er.e[0] === n.id || (reachAll && down[er.e[0]] && down[er.e[1]]);
+      var isUp = false, isDown = false;
+      er.orig.forEach(function (e) {
+        if (e[1] === n.id || (reachAll && up[e[1]] && up[e[0]])) isUp = true;
+        if (e[0] === n.id || (reachAll && down[e[0]] && down[e[1]])) isDown = true;
+      });
       er.path.setAttribute('class', 'edge' + (isUp ? ' up' : isDown ? ' down' : ' dim'));
       er.path.setAttribute('marker-end', 'url(#' + (isUp ? 'arr-up' : isDown ? 'arr-down' : 'arr') + ')');
     });
@@ -570,7 +649,7 @@ export async function generateArchMap(root, liveIndex = null) {
     var ups = Object.keys(up).sort(), dns = Object.keys(down).sort();
     setPanel(
       '<h2>' + esc(n.id) + '</h2>' +
-      '<p class="meta">' + esc(n.lang) + ' · ' + n.symbols + ' symbols · <span class="link" data-nav="#f=' + esc(n.id) + '">open symbols \\u2192</span></p>' +
+      '<p class="meta">' + esc(n.lang) + ' · ' + n.symbols + ' symbols · <span class="link" data-nav="#f=' + esc(n.id) + '">open symbols →</span></p>' +
       '<h3 style="color:var(--up)">Imported by · ' + ups.length + '</h3>' +
       (ups.length ? '<ul>' + ups.slice(0, 12).map(li).join('') + '</ul>' : '<p class="hint">nothing in-repo</p>') +
       '<h3 style="color:var(--down)">Imports · ' + dns.length + '</h3>' +
@@ -653,16 +732,28 @@ export async function generateArchMap(root, liveIndex = null) {
     var bg = el('rect'); bg.setAttribute('fill', 'url(#dots)');
     bg.setAttribute('x', -4000); bg.setAttribute('y', -4000); bg.setAttribute('width', 12000); bg.setAttribute('height', 12000);
     var h = decodeURIComponent(location.hash || '');
+    function dirCrumbs(pathStr) {
+      var items = [{ label: 'repo', hash: '' }];
+      var acc = '';
+      (pathStr ? pathStr.split('/') : []).forEach(function (seg) {
+        acc = acc ? acc + '/' + seg : seg;
+        items.push({ label: seg, hash: '#d=' + acc });
+      });
+      return items;
+    }
     if (h.indexOf('#f=') === 0 && byId[h.slice(3)]) {
       var f = h.slice(3);
-      crumbs([{ label: 'repo', hash: '' }, { label: cName(byId[f].cluster), hash: '#c=' + byId[f].cluster }, { label: f.split('/').pop() }]);
+      var cr = dirCrumbs(dirnameOf(f));
+      cr.push({ label: f.split('/').pop() });
+      crumbs(cr);
       buildFile(f);
-    } else if (h.indexOf('#c=') === 0 && clusterNames.indexOf(h.slice(3)) >= 0) {
-      crumbs([{ label: 'repo', hash: '' }, { label: cName(h.slice(3)) }]);
-      buildCluster(h.slice(3));
+    } else if ((h.indexOf('#d=') === 0 || h.indexOf('#c=') === 0) && dirExists(h.slice(3))) {
+      var dp = h.slice(3);
+      crumbs(dirCrumbs(dp));
+      buildDir(dp);
     } else {
       crumbs([{ label: 'repo' }]);
-      buildOverview();
+      buildDir('');
     }
     fit();
   }
@@ -727,8 +818,13 @@ export async function generateArchMap(root, liveIndex = null) {
     if (e.key === 'Escape') {
       q.value = '';
       var h = location.hash;
-      if (h.indexOf('#f=') === 0) location.hash = '#c=' + byId[decodeURIComponent(h.slice(3))].cluster;
-      else if (h.indexOf('#c=') === 0) location.hash = '';
+      if (h.indexOf('#f=') === 0) {
+        var d0 = dirnameOf(decodeURIComponent(h.slice(3)));
+        location.hash = d0 ? '#d=' + d0 : '';
+      } else if (h.indexOf('#d=') === 0 || h.indexOf('#c=') === 0) {
+        var up0 = dirnameOf(decodeURIComponent(h.slice(3)));
+        location.hash = up0 ? '#d=' + up0 : '';
+      }
       else build();
     }
   });
