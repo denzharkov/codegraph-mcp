@@ -1,34 +1,66 @@
 # codegraph-mcp
 
 Local MCP server that gives Claude Code (CLI **and** the VS Code extension) a
-tree-sitter symbol graph of your repository: instant symbol lookup, compact
-file skeletons, call-site and impact analysis, and persistent project notes —
-so the agent reads *signatures* instead of whole files and spends far fewer
-tokens exploring your codebase.
+queryable model of your codebase — where things are defined, who calls what,
+what depends on what, and what was decided in earlier sessions. Without it the
+agent rediscovers your architecture every session through grep and
+file-by-file reading; with it, structural questions get structural answers:
+
+- **Safer changes** — before touching a function the agent sees its blast
+  radius (`analyze_impact`), every call site (`find_callers`), every mention
+  (`find_references`) and every dependent module (`who_imports`), instead of
+  editing whatever grep happened to surface.
+- **Faster orientation** — one `repo_map` call maps the project by import
+  centrality; `find_symbol` and `semantic_search` ("where is auth token
+  validated") land directly on the right code.
+- **Continuity** — `save_note` / `recall_notes` carry decisions and gotchas
+  across sessions, per repository.
+- **Cheaper exploration** — as a consequence of the above the agent reads
+  signatures instead of whole files (`file_skeleton`, `read_symbol`), and a
+  transparent proxy compresses conversation history at the wire level.
+  `usage_stats` reports the measured savings.
 
 **100% portable**: pure JavaScript + WASM grammars. No node-gyp, no native
 compilation. `npm install` works identically on Windows, macOS and Linux.
 
 ## Tools exposed to the agent
 
+**Understanding & navigation**
+
 | Tool | What it does |
 |---|---|
-| `repo_map` | Overview: languages, counts, key files with their exported symbols |
+| `repo_map` | Project map: languages, counts, key files ranked by import centrality |
 | `find_symbol` | Locate a function/class/method/type definition by name, repo-wide |
-| `read_symbol` | Read the full source of *one* symbol without reading the file |
-| `file_skeleton` | Imports + all signatures of a file, no bodies (10–50× fewer tokens) |
+| `semantic_search` | Find code/notes **by meaning** ("where is auth token validated") |
+
+**Change safety**
+
+| Tool | What it does |
+|---|---|
+| `analyze_impact` | Transitive callers (blast radius) before changing a function |
 | `find_callers` | Every call site of a symbol, with the enclosing caller |
 | `find_references` | Every textual mention of an identifier, annotated with enclosing symbol |
 | `who_imports` | Direct dependents of a module (reverse import graph) |
-| `analyze_impact` | Transitive callers (blast radius) before changing a function |
-| `reindex` | Force incremental or full re-scan |
-| `semantic_search` | Find code/notes **by meaning** ("where is auth token validated") |
+
+**Focused reading**
+
+| Tool | What it does |
+|---|---|
+| `file_skeleton` | Imports + all signatures of a file, no bodies (10–50× fewer tokens) |
+| `read_symbol` | Read the full source of *one* symbol without reading the file |
+
+**Memory & operations**
+
+| Tool | What it does |
+|---|---|
 | `save_note` / `recall_notes` | Persistent per-repo notes that survive sessions |
+| `reindex` | Force incremental or full re-scan |
 | `usage_stats` | Calls per tool + conservative estimate of tokens saved |
 | `generate_dashboard` | Self-contained HTML report (savings, usage, languages, central files) |
 
 Supported languages: JavaScript, TypeScript, TSX, Python, Go, Rust, Java,
-Ruby, C, C++, C#, PHP.
+Ruby, C, C++, C#, PHP, GDScript. Files the indexer cannot extract are counted
+and reported by `repo_map`, so partial coverage is always visible.
 
 ## Install
 
@@ -65,9 +97,10 @@ To remove: `node bin/codegraph-mcp.js uninstall`.
 ## Zero configuration
 
 No `CLAUDE.md` edits or prompt tweaks are needed: the server ships its usage
-guidance ("prefer `file_skeleton` over reading files, `find_symbol` over
-grep, …") through the MCP `instructions` field, which Claude Code injects
-into the agent's context automatically on connect. Install, register, done.
+guidance ("run `analyze_impact` before changing a function, `find_symbol`
+instead of grep, `file_skeleton` before reading a file, …") through the MCP
+`instructions` field, which Claude Code injects into the agent's context
+automatically on connect. Install, register, done.
 
 ## Transparent proxy (guaranteed savings)
 
