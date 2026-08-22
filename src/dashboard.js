@@ -14,8 +14,8 @@ const fmt = (n) => {
   return String(n);
 };
 
-export async function generateDashboard(root) {
-  const index = new Index(root);
+export async function generateDashboard(root, liveIndex = null) {
+  const index = liveIndex ?? new Index(root);
   await index.ensure();
   const g = index.graph;
   const graphStats = g.stats();
@@ -171,8 +171,8 @@ export async function generateDashboard(root) {
 `;
 }
 
-export async function writeDashboard(root) {
-  const html = await generateDashboard(root);
+export async function writeDashboard(root, liveIndex = null) {
+  const html = await generateDashboard(root, liveIndex);
   const file = path.join(root, '.codegraph', 'dashboard.html');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, '<!doctype html>\n<html><head><meta charset="utf-8">\n' + html + '</html>');

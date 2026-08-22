@@ -32,7 +32,7 @@ export async function createServer(root) {
   // Usage guidance ships with the server via MCP `instructions` — the client
   // (Claude Code) injects it automatically, so users need zero configuration.
   const server = new McpServer(
-    { name: 'codegraph', version: '0.5.2' },
+    { name: 'codegraph', version: '0.6.0' },
     {
       instructions: [
         'This server maintains a pre-built symbol graph of the repository. Prefer its tools over raw file reads and grep:',
@@ -50,9 +50,29 @@ export async function createServer(root) {
   // Every tool call is recorded; handlers may pass a counterfactual size to
   // text() when a direct "vs reading the whole file" comparison exists.
   // usage_stats itself is excluded so reading the report doesn't skew it.
-  const registerTool = (name, def, handler) =>
-    server.registerTool(name, def, async (args) => {
-      const res = await handler(args ?? {});
+  //
+  // Required params are validated HERE, not by the SDK: the SDK rejects a
+  // call before the handler runs and surfaces a raw -32602 protocol error the
+  // agent cannot read or recover from. We register every field as optional
+  // and answer an incomplete call with a normal isError result that names the
+  // missing parameter — the agent fixes its call on the next turn.
+  const registerTool = (name, def, handler) => {
+    const shape = def.inputSchema || {};
+    const required = Object.entries(shape).filter(([, s]) => !s.isOptional());
+    const loosened = Object.fromEntries(
+      Object.entries(shape).map(([k, s]) => [k, s.isOptional() ? s : s.optional()])
+    );
+    server.registerTool(name, { ...def, inputSchema: loosened }, async (args) => {
+      const a = args ?? {};
+      const missing = required.filter(([k]) => a[k] === undefined || a[k] === null || a[k] === '');
+      if (missing.length > 0) {
+        const hints = missing.map(([k, s]) => `"${k}" (${s.description || 'required'})`).join(', ');
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Missing required parameter ${hints} — call ${name} again with it.` }]
+        };
+      }
+      const res = await handler(a);
       if (name !== 'usage_stats') {
         const chars = (res.content || []).reduce((n, c) => n + (c.text?.length || 0), 0);
         stats.record(name, chars, res.counterfactualChars ?? null);
@@ -60,6 +80,7 @@ export async function createServer(root) {
       }
       return res;
     });
+  };
 
   registerTool(
     'repo_map',
@@ -268,7 +289,7 @@ export async function createServer(root) {
     },
     async () => {
       const { writeDashboard } = await import('./dashboard.js');
-      const file = await writeDashboard(root);
+      const file = await writeDashboard(root, index); // reuse the live index
       return text(`Dashboard written to ${file} — open it in a browser.`);
     }
   );
@@ -389,10 +410,16 @@ export async function createServer(root) {
         const stats = await index.fullReindex();
         return text(`Full reindex done: ${stats.files} files, ${stats.symbols} symbols, ${stats.calls} call edges.`);
       }
-      await index.ensure();
-      const r = await index.refresh({ force: true });
-      const stats = index.graph.stats();
-      return text(`Refreshed: ${r.parsed} file(s) re-parsed, ${r.removed} removed. Index: ${stats.files} files, ${stats.symbols} symbols.`);
+      // ensure() already force-refreshes on first init — avoid a second walk
+      let r;
+      if (index.initialized) {
+        r = await index.refresh({ force: true });
+      } else {
+        await index.ensure();
+        r = { parsed: index.graph.files.size, removed: 0 };
+      }
+      const s = index.graph.stats();
+      return text(`Refreshed: ${r.parsed} file(s) re-parsed, ${r.removed} removed. Index: ${s.files} files, ${s.symbols} symbols.`);
     }
   );
 
@@ -423,17 +450,15 @@ export async function createServer(root) {
       }
     },
     async ({ query, limit = 5 }) => {
+      const q = (query || '').trim();
       notes.load();
-      let found;
-      if (notes.notes.length === 0) {
-        found = [];
-      } else if (!query || !query.trim()) {
-        found = notes.notes.slice(-limit).reverse();
-      } else {
-        const { results } = await semanticSearch(vectors, query, noteItems(notes.notes), limit);
+      if (notes.notes.length === 0) return text('No notes saved yet — use save_note to record project decisions.');
+      let found = [];
+      if (q) {
+        const { results } = await semanticSearch(vectors, q, noteItems(notes.notes), limit);
         found = results.map((r) => r.item.note);
-        if (found.length === 0) found = notes.recall(query, limit);
       }
+      if (found.length === 0) found = notes.recall(q, limit);
       if (found.length === 0) return text('No matching notes.');
       return text(
         found

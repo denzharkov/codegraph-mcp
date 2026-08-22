@@ -34,7 +34,9 @@ before(() => {
 });
 
 after(() => {
-  fs.rmSync(fixtureDir, { recursive: true, force: true });
+  // the spawned MCP server may release .codegraph/* handles slightly after
+  // client.close() on Windows — retry instead of failing teardown
+  fs.rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 test('indexer builds a graph over a mixed-language fixture', async () => {
@@ -179,22 +181,70 @@ test('MCP stdio round-trip: tools list and calls work end-to-end', async () => {
       generate_dashboard: {}
     };
     for (const t of tools.tools) {
-      assert.ok(t.name in minimalArgs, `no minimal-args case for new tool "${t.name}" — add one`);
-      const r = await client.callTool({ name: t.name, arguments: minimalArgs[t.name] });
+      assert.ok(Object.hasOwn(minimalArgs, t.name), `no minimal-args case for new tool "${t.name}" — add one`);
+      let r;
+      try {
+        // generous timeout: semantic_search may cold-load the embedding model
+        r = await client.callTool({ name: t.name, arguments: minimalArgs[t.name] }, undefined, { timeout: 120_000 });
+      } catch (e) {
+        assert.fail(`${t.name} raised a protocol error on minimal args: ${e.message}`);
+      }
       assert.ok(!r.isError, `${t.name} failed on minimal args: ${r.content?.[0]?.text}`);
     }
+
+    // an INCOMPLETE call must come back as a readable tool result the agent
+    // can react to, never as a raw -32602 protocol error
+    const incomplete = await client.callTool({ name: 'find_symbol', arguments: {} });
+    assert.equal(incomplete.isError, true);
+    assert.match(incomplete.content[0].text, /Missing required parameter "name"/);
+
+    // recency contract: the newest note comes back FIRST on an argless call
+    await client.callTool({ name: 'save_note', arguments: { text: 'ordering probe: newest note wins' } });
     const argless = await client.callTool({ name: 'recall_notes', arguments: {} });
-    assert.match(argless.content[0].text, /minimal-args sweep note|validates before persisting/, 'argless recall returns recent notes');
+    const firstBlock = argless.content[0].text.split('\n\n')[0];
+    assert.match(firstBlock, /ordering probe: newest note wins/, 'argless recall must list the newest note first');
 
     const statsRes = await client.callTool({ name: 'usage_stats', arguments: {} });
-    assert.match(statsRes.content[0].text, /read_symbol: \d+ call/);
-    assert.match(statsRes.content[0].text, /find_symbol: \d+ call/);
-    assert.match(statsRes.content[0].text, /analyze_impact: \d+ call/);
-    assert.match(statsRes.content[0].text, /save_note: \d+ call/);
+    // exact counts guard against double-recording in the registerTool wrapper:
+    // each of these ran once in the explicit section and once in the sweep
+    // (the incomplete find_symbol call above is rejected before recording)
+    assert.match(statsRes.content[0].text, /read_symbol: 2 call/);
+    assert.match(statsRes.content[0].text, /find_symbol: 2 call/);
+    assert.match(statsRes.content[0].text, /analyze_impact: 2 call/);
     assert.match(statsRes.content[0].text, /tokens saved/);
     assert.ok(!statsRes.content[0].text.includes('usage_stats:'), 'usage_stats must not record itself');
   } finally {
     await client.close();
+  }
+});
+
+test('notes: two sessions share one store without lost updates; malformed entries never crash', async () => {
+  const { Notes } = await import('../src/memory.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-notes-'));
+  try {
+    const sessionA = new Notes(dir);
+    const sessionB = new Notes(dir);
+    sessionA.add('decision from session A');
+    sessionB.add('decision from session B'); // must NOT clobber A's note
+    const fresh = new Notes(dir);
+    const all = fresh.recall('', 10);
+    assert.equal(all.length, 2, 'both sessions notes survive');
+    assert.match(all[0].text, /session B/, 'newest first');
+
+    // hand-edited / old-schema rows are normalized away or repaired, not fatal
+    fs.writeFileSync(
+      path.join(dir, '.codegraph', 'notes.json'),
+      JSON.stringify([{ text: 'ok note' }, { id: 5 }, { text: 'tagged', tags: 'oops', createdAt: null }, 'garbage'])
+    );
+    const c = new Notes(dir);
+    const recalled = c.recall('', 10);
+    assert.equal(recalled.length, 2, 'entries without text are dropped');
+    for (const n of recalled) {
+      assert.equal(typeof n.createdAt, 'string');
+      assert.ok(Array.isArray(n.tags));
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
