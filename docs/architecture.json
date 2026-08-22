@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "codegraph-mcp",
+    "subtitle": "Symbol graph + transparent proxy for Claude Code",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/denzharkov/codegraph-mcp",
+      "revision": "d1fe6bed42a6fcf8b8565ba0fb11c28f805fe1a3"
+    },
+    "views": [
+      { "id": "graph-path", "label": "Symbol graph path", "focus": ["claude", "mcp", "indexer", "graph"], "note": "The agent queries structure instead of re-reading files: tools answer from a persisted tree-sitter graph." },
+      { "id": "wire-path", "label": "Wire compression path", "focus": ["claude", "proxy", "transforms", "anthropic"], "note": "The proxy dedupes and skeletonizes history before requests leave the machine; auth passes through untouched." },
+      { "id": "side-services", "label": "Memory and reports", "focus": ["mcp", "embed", "notes", "reports"], "note": "Semantic search over local embeddings, cross-session notes, HTML dashboard and architecture map." }
+    ]
+  },
+  "components": [
+    { "id": "claude", "type": "external", "label": "Claude Code", "sublabel": "CLI / VS Code", "pos": [40, 300], "size": [140, 64] },
+    { "id": "mcp", "type": "backend", "label": "MCP Server", "sublabel": "stdio · 12 tools", "pos": [300, 300], "size": [150, 64], "sources": [{ "path": "src/server.js", "label": "tool registry" }] },
+    { "id": "indexer", "type": "backend", "label": "Indexer", "sublabel": "tree-sitter WASM", "pos": [560, 440], "size": [150, 60], "tag": "13 languages", "sources": [{ "path": "src/extract.js" }] },
+    { "id": "graph", "type": "database", "label": "Symbol Graph", "sublabel": "symbols · calls · imports", "pos": [820, 300], "size": [160, 64], "sources": [{ "path": "src/graph.js" }] },
+    { "id": "embed", "type": "backend", "label": "Embeddings", "sublabel": "MiniLM q8 · optional", "pos": [560, 170], "size": [150, 60], "sources": [{ "path": "src/embeddings.js" }] },
+    { "id": "notes", "type": "database", "label": "Notes Store", "sublabel": "notes.json", "pos": [820, 170], "size": [150, 60], "sources": [{ "path": "src/memory.js" }] },
+    { "id": "reports", "type": "frontend", "label": "Reports", "sublabel": "dashboard · arch map", "pos": [295, 440], "size": [160, 60], "sources": [{ "path": "src/archmap.js" }] },
+    { "id": "proxy", "type": "security", "label": "Transparent Proxy", "sublabel": "127.0.0.1:3210", "pos": [300, 60], "size": [160, 64], "tag": "auth pass-through", "sources": [{ "path": "src/proxy.js" }] },
+    { "id": "transforms", "type": "backend", "label": "Transforms", "sublabel": "dedup · skeletons", "pos": [560, 60], "size": [150, 60], "sources": [{ "path": "src/transforms.js" }] },
+    { "id": "anthropic", "type": "cloud", "label": "Anthropic API", "sublabel": "api.anthropic.com", "pos": [820, 60], "size": [150, 60] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Local machine", "wraps": ["claude", "mcp", "indexer", "graph", "embed", "notes", "reports", "proxy", "transforms"] },
+    { "kind": "security-group", "label": ".codegraph per-repo state", "wraps": ["graph", "notes", "reports"] }
+  ],
+  "connections": [
+    { "id": "tool-calls", "from": "claude", "to": "mcp", "label": "tool calls · stdio", "variant": "emphasis" },
+    { "id": "graph-queries", "from": "mcp", "to": "graph", "label": "structural queries", "variant": "emphasis" },
+    { "id": "index-writes", "from": "indexer", "to": "graph", "label": "parse + persist", "fromSide": "top", "toSide": "bottom" },
+    { "id": "semantic", "from": "mcp", "to": "embed", "label": "semantic_search", "variant": "dashed", "fromSide": "top", "toSide": "left" },
+    { "id": "note-io", "from": "mcp", "to": "notes", "label": "save / recall", "variant": "dashed", "fromSide": "top", "toSide": "left" },
+    { "id": "report-gen", "from": "mcp", "to": "reports", "label": "html reports", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 40 },
+    { "id": "api-traffic", "from": "claude", "to": "proxy", "label": "ANTHROPIC_BASE_URL", "variant": "emphasis", "fromSide": "top", "toSide": "left" },
+    { "id": "rewrite", "from": "proxy", "to": "transforms", "label": "rewrite history", "variant": "dashed" },
+    { "id": "upstream", "from": "transforms", "to": "anthropic", "label": "HTTPS · SSE", "variant": "security" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Graph layer", "items": ["tree-sitter WASM parses 13 languages, no native builds", "Symbols, call edges and imports persist per repo", "Agent reads signatures, not whole files"] },
+    { "dot": "orange", "title": "Wire layer", "items": ["Identical tool results deduplicated before send", "Stale re-reads replaced by signature skeletons", "Deterministic transforms keep the prompt cache stable"] },
+    { "dot": "violet", "title": "Zero config", "items": ["Usage guidance ships via MCP instructions", "One-command install for CLI and VS Code"] }
+  ]
+}
