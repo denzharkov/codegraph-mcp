@@ -1,6 +1,6 @@
 {
   "name": "codegraph-mcp",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "Local MCP server for Claude Code (CLI & VS Code): tree-sitter repo graph, symbol search, impact analysis, compact AST skeletons and session notes. Pure JS + WASM, no native builds.",
   "type": "module",
   "bin": {

@@ -203,7 +203,7 @@ export async function generateArchMap(root, liveIndex = null) {
   .edge.down { stroke:var(--down); stroke-width:1.8; stroke-dasharray:6 5; animation:flow 1.1s linear infinite; }
   @keyframes flow { to { stroke-dashoffset:-11; } }
   @media (prefers-reduced-motion: reduce) { .edge.up, .edge.down { animation:none; } }
-  .elabel { font:10px system-ui,sans-serif; fill:var(--muted); }
+  .elabel { font:10px system-ui,sans-serif; fill:var(--muted); paint-order:stroke; stroke:var(--page); stroke-width:3px; stroke-linejoin:round; }
   .dim { opacity:.13; }
 </style>
 <div id="bar">
@@ -304,15 +304,37 @@ export async function generateArchMap(root, liveIndex = null) {
     var dx = p2[0] - p1[0], dy = p2[1] - p1[1], d = Math.sqrt(dx * dx + dy * dy) || 1;
     var bend = Math.min(30, d * 0.14) * (opts.bend == null ? 1 : opts.bend);
     var ox = -dy / d * bend, oy = dx / d * bend;
+    var cpx = mx + ox, cpy = my + oy;
     var p = el('path', 'edge' + (opts.cls ? ' ' + opts.cls : ''));
-    p.setAttribute('d', 'M' + p1[0] + ',' + p1[1] + ' Q' + (mx + ox) + ',' + (my + oy) + ' ' + p2[0] + ',' + p2[1]);
+    p.setAttribute('d', 'M' + p1[0] + ',' + p1[1] + ' Q' + cpx + ',' + cpy + ' ' + p2[0] + ',' + p2[1]);
     p.setAttribute('marker-end', 'url(#arr)');
+    var labelEl = null;
     if (opts.label) {
-      var t = el('text', 'elabel');
-      t.setAttribute('x', mx + ox); t.setAttribute('y', my + oy - 3); t.setAttribute('text-anchor', 'middle');
-      t.textContent = opts.label;
+      // point on the quadratic at t — off-center placement spreads labels
+      var lt = opts.labelT == null ? 0.5 : opts.labelT;
+      var it = 1 - lt;
+      var lx = it * it * p1[0] + 2 * it * lt * cpx + lt * lt * p2[0];
+      var ly = it * it * p1[1] + 2 * it * lt * cpy + lt * lt * p2[1];
+      labelEl = el('text', 'elabel');
+      labelEl.setAttribute('x', lx); labelEl.setAttribute('y', ly - 3); labelEl.setAttribute('text-anchor', 'middle');
+      labelEl.textContent = opts.label;
     }
-    return p;
+    return { path: p, labelEl: labelEl };
+  }
+  // deterministic pass: push overlapping edge labels apart vertically
+  function spreadLabels(labels) {
+    labels = labels.filter(Boolean);
+    for (var pass = 0; pass < 3; pass++) {
+      for (var i = 0; i < labels.length; i++) for (var j = i + 1; j < labels.length; j++) {
+        var A = labels[i], B = labels[j];
+        var ax = +A.getAttribute('x'), ay = +A.getAttribute('y');
+        var bx = +B.getAttribute('x'), by = +B.getAttribute('y');
+        var wHalf = (A.textContent.length + B.textContent.length) * 2.7;
+        if (Math.abs(ax - bx) < wHalf && Math.abs(ay - by) < 13) {
+          B.setAttribute('y', by + (by >= ay ? 14 : -14));
+        }
+      }
+    }
   }
   function chip(x, y, w, label, count, accent, onClick, title) {
     var g = el('g', 'node');
@@ -350,12 +372,25 @@ export async function generateArchMap(root, liveIndex = null) {
     });
     var rects = {};
     cards.forEach(function (k) { rects[k.c] = { x: k.x, y: k.y, w: k.w, h: k.h }; });
+    var labels = [];
     Object.keys(cAgg).forEach(function (key) {
       var parts = key.split('\\u0000');
       if (!rects[parts[0]] || !rects[parts[1]]) return;
       var w = cAgg[key];
-      curve(rects[parts[0]], rects[parts[1]], { cls: w > 6 ? 'w3' : w > 2 ? 'w2' : '', label: w + (w === 1 ? ' import' : ' imports') });
+      // opposite-direction pairs bow to opposite sides so they don't merge
+      var hasReverse = cAgg[parts[1] + '\\u0000' + parts[0]] != null;
+      var sign = hasReverse ? (parts[0] < parts[1] ? 1 : -1) : 1;
+      var r = curve(rects[parts[0]], rects[parts[1]], {
+        cls: w > 6 ? 'w3' : w > 2 ? 'w2' : '',
+        label: w + (w === 1 ? ' import' : ' imports'),
+        labelT: 0.35,
+        bend: sign
+      });
+      labels.push(r.labelEl);
     });
+    spreadLabels(labels);
+    // re-append labels after the cards render so they stay on top
+    setTimeout(function () { labels.filter(Boolean).forEach(function (l) { scene.appendChild(l); }); }, 0);
     cards.forEach(function (k) {
       var g = el('g', 'bigcard');
       var body = el('rect', 'body', g);
@@ -374,6 +409,35 @@ export async function generateArchMap(root, liveIndex = null) {
       g.addEventListener('click', function (ev) { ev.stopPropagation(); if (!moved) location.hash = '#c=' + encodeURIComponent(k.c); });
       grow(k.x, k.y, k.w, k.h);
     });
+    // layering narrative: depth = longest chain of "imports" below a cluster,
+    // so foundations sit at layer 1 and entry-facing code on top
+    var cOut = {};
+    Object.keys(cAgg).forEach(function (key) {
+      var parts = key.split('\\u0000');
+      (cOut[parts[0]] = cOut[parts[0]] || []).push(parts[1]);
+    });
+    var depthMemo = {};
+    function cDepth(c, trail) {
+      if (depthMemo[c] != null) return depthMemo[c];
+      if (trail[c]) return 1; // cycle guard
+      trail[c] = 1;
+      var best = 1;
+      (cOut[c] || []).forEach(function (t) { best = Math.max(best, 1 + cDepth(t, trail)); });
+      delete trail[c];
+      depthMemo[c] = best;
+      return best;
+    }
+    var layered = {};
+    var connected = clusterNames.filter(function (c) { return cOut[c] || Object.keys(cAgg).some(function (k) { return k.split('\\u0000')[1] === c; }); });
+    connected.forEach(function (c) { var d = cDepth(c, {}); (layered[d] = layered[d] || []).push(c); });
+    var layerRows = Object.keys(layered).map(Number).sort(function (a, b) { return b - a; }).map(function (d) {
+      var names = layered[d].map(function (c) {
+        return '<span class="link" data-nav="#c=' + esc(c) + '">' + esc(cName(c)) + '</span>';
+      }).join(', ');
+      return '<li>' + names + '</li>';
+    });
+    var standalone = clusterNames.filter(function (c) { return connected.indexOf(c) < 0; });
+
     // panel: project summary + derived guided views
     var hub = nodes.slice().sort(function (a, b) { return b.deg - a.deg; })[0];
     var entry = nodes.filter(function (n) { return n.deg === 0 && (outb[n.id] || []).length > 0; })
@@ -389,6 +453,10 @@ export async function generateArchMap(root, liveIndex = null) {
     setPanel(
       '<h2>' + esc(DATA.root) + '</h2>' +
       '<p class="meta">' + DATA.fileCount + ' files · ' + edges.length + ' import edges' + (DATA.aggregated ? ' · aggregated (repo over ' + ${MAX_FILE_NODES} + ' files)' : '') + '</p>' +
+      (layerRows.length > 1
+        ? '<h3>Layers (top builds on bottom)</h3><ul>' + layerRows.join('') + '</ul>' +
+          (standalone.length ? '<p class="hint">standalone: ' + standalone.map(cName).map(esc).join(', ') + '</p>' : '')
+        : '') +
       '<h3>Start here</h3><ul>' + (views.join('') || '<li class="hint">no import edges resolved</li>') + '</ul>' +
       '<h3>How to read</h3><p class="hint">Cards are subsystems; edge labels count imports between them. Click a card to open its files, click a file twice to open its symbols. Search <span class="kbd">/</span> · back <span class="kbd">Esc</span>.</p>'
     );
@@ -491,7 +559,7 @@ export async function generateArchMap(root, liveIndex = null) {
         if (crossSeen[k]) return;
         crossSeen[k] = 1;
       }
-      edgeRefs.push({ e: e, path: curve(ra, rb, { bend: a.cluster === c && b.cluster === c ? 0.5 : 1 }) });
+      edgeRefs.push({ e: e, path: curve(ra, rb, { bend: a.cluster === c && b.cluster === c ? 0.5 : 1 }).path });
     });
     var chips = {};
     files.forEach(function (n) {
