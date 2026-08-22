@@ -28,7 +28,22 @@ export async function createServer(root) {
   const stats = new Stats(root);
   const vectors = new VectorStore(root);
 
-  const server = new McpServer({ name: 'codegraph', version: '0.2.0' });
+  // Usage guidance ships with the server via MCP `instructions` — the client
+  // (Claude Code) injects it automatically, so users need zero configuration.
+  const server = new McpServer(
+    { name: 'codegraph', version: '0.2.1' },
+    {
+      instructions: [
+        'This server maintains a pre-built symbol graph of the repository. Prefer its tools over raw file reads and grep:',
+        '- Start with repo_map to orient in the repo instead of listing/reading files.',
+        '- Before reading any source file, call file_skeleton; read the full file only if the skeleton is not enough.',
+        '- To locate a definition use find_symbol (by name) or semantic_search (by meaning) instead of grep.',
+        '- Read a single function/class with read_symbol instead of the whole file.',
+        "- Before changing a function's signature or behavior, run analyze_impact.",
+        '- Persist non-obvious decisions with save_note; check recall_notes when starting a task.'
+      ].join('\n')
+    }
+  );
 
   // Every tool call is recorded; handlers may pass a counterfactual size to
   // text() when a direct "vs reading the whole file" comparison exists.

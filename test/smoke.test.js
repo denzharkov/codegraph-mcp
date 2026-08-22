@@ -108,6 +108,9 @@ test('MCP stdio round-trip: tools list and calls work end-to-end', async () => {
   await client.connect(transport);
 
   try {
+    const instructions = client.getInstructions();
+    assert.ok(instructions && instructions.includes('file_skeleton'), 'server must ship usage instructions via MCP');
+
     const tools = await client.listTools();
     const names = tools.tools.map((t) => t.name).sort();
     assert.deepEqual(names, [

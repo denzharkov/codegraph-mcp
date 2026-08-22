@@ -29,24 +29,22 @@ Ruby, C, C++, C#, PHP.
 
 ## Install
 
-Requires Node.js ≥ 20.
+Requires Node.js ≥ 20 and Claude Code. Identical on Windows / macOS / Linux:
 
 ```bash
-git clone <this repo> codegraph-mcp   # or copy the folder
-cd codegraph-mcp
-npm install
-npm test          # optional: 4 smoke tests incl. full MCP round-trip
+git clone https://github.com/denzharkov/codegraph-mcp
+cd codegraph-mcp && npm install
+node bin/codegraph-mcp.js install     # registers in Claude Code (user scope)
 ```
 
-## Hook up to Claude Code
+That's it — the `install` command runs `claude mcp add` for you, and the
+server works in the CLI **and** the VS Code extension (they share MCP
+configuration). Verify with `claude mcp list` or `/mcp` inside Claude Code.
 
 The server indexes **the directory it is started in** (Claude Code starts MCP
 servers in the project directory), or the path given via `--root` /
-`CODEGRAPH_ROOT`.
-
-### Per project (recommended — works in CLI *and* VS Code extension)
-
-Add `.mcp.json` to the project root:
+`CODEGRAPH_ROOT`. To limit it to a single project instead of user scope, add
+`.mcp.json` to that project:
 
 ```json
 {
@@ -59,39 +57,14 @@ Add `.mcp.json` to the project root:
 }
 ```
 
-On Windows use e.g. `"C:/Users/you/codegraph-mcp/bin/codegraph-mcp.js"`
-(forward slashes are fine).
+To remove: `node bin/codegraph-mcp.js uninstall`.
 
-### For all projects (user scope)
+## Zero configuration
 
-```bash
-claude mcp add codegraph -s user -- node /absolute/path/to/codegraph-mcp/bin/codegraph-mcp.js
-```
-
-Both registrations are picked up by the VS Code extension automatically — it
-reads the same MCP configuration as the CLI. Check with `/mcp` inside Claude
-Code.
-
-## Teach the agent to prefer these tools
-
-Registering the server is not enough — agents habitually reach for raw file
-reads and grep. Add this to your project's `CLAUDE.md` (or the global
-`~/.claude/CLAUDE.md`) so the savings actually happen:
-
-```markdown
-## Codegraph tools
-
-When the codegraph MCP server is available, prefer its tools over raw reads:
-- Start with `repo_map` to orient in the repo instead of listing/reading files.
-- Before reading any file, call `file_skeleton`; read the full file only if
-  the skeleton is not enough.
-- To locate a definition use `find_symbol` (by name) or `semantic_search`
-  (by meaning) instead of grep.
-- Read a single function/class with `read_symbol` instead of the whole file.
-- Before changing a function's signature or behavior, run `analyze_impact`.
-- Persist non-obvious decisions with `save_note`; check `recall_notes` when
-  starting a task.
-```
+No `CLAUDE.md` edits or prompt tweaks are needed: the server ships its usage
+guidance ("prefer `file_skeleton` over reading files, `find_symbol` over
+grep, …") through the MCP `instructions` field, which Claude Code injects
+into the agent's context automatically on connect. Install, register, done.
 
 ## CLI usage
 
