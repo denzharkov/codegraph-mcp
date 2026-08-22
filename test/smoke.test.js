@@ -212,6 +212,9 @@ test('MCP stdio round-trip: tools list and calls work end-to-end', async () => {
 
     const dashRes = await client.callTool({ name: 'usage_stats', arguments: { dashboard: true } });
     assert.match(dashRes.content[0].text, /dashboard\.html/, 'dashboard=true returns the report path');
+
+    const mapHtmlRes = await client.callTool({ name: 'repo_map', arguments: { html: true } });
+    assert.match(mapHtmlRes.content[0].text, /map\.html/, 'repo_map html=true returns the map path');
   } finally {
     await client.close();
   }
@@ -281,6 +284,20 @@ test('gdscript extractor finds funcs, signals, classes and calls', async () => {
   assert.ok(r.calls.some((c) => c.callee === 'connect_signals'), 'call edge found');
   assert.ok(r.imports.includes('extends CharacterBody2D'));
   assert.equal(byName._health.exported, false);
+});
+
+test('architecture map embeds the import graph as self-contained HTML', async () => {
+  const { generateArchMap, collectMapData } = await import('../src/archmap.js');
+  const data = await collectMapData(fixtureDir);
+  assert.ok(data.nodes.some((n) => n.id === 'src/db.js'), 'file nodes present');
+  assert.ok(
+    data.edges.some((e) => e[0] === 'src/api.js' && e[1] === 'src/db.js'),
+    'import edge api.js -> db.js present'
+  );
+  const html = await generateArchMap(fixtureDir);
+  assert.match(html, /Codegraph Map/);
+  assert.match(html, /src\/db\.js/);
+  assert.ok(!/src=["']https?:|href=["']https?:/.test(html), 'no external assets');
 });
 
 test('dashboard renders usage stats and central files', async () => {

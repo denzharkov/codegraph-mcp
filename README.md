@@ -29,7 +29,7 @@ compilation. `npm install` works identically on Windows, macOS and Linux.
 
 | Tool | What it does |
 |---|---|
-| `repo_map` | Project map: languages, counts, key files ranked by import centrality |
+| `repo_map` | Project map: languages, counts, key files by import centrality; `html=true` writes an interactive architecture map |
 | `find_symbol` | Locate a function/class/method/type definition by name, repo-wide |
 | `semantic_search` | Find code/notes **by meaning** ("where is auth token validated") |
 
@@ -145,8 +145,15 @@ on proxy start.
 node bin/codegraph-mcp.js index                # index cwd, print stats
 node bin/codegraph-mcp.js index --root ~/proj  # index another directory
 node bin/codegraph-mcp.js dashboard            # HTML report, opens in browser
+node bin/codegraph-mcp.js map                  # interactive architecture map
 node bin/codegraph-mcp.js                      # start stdio MCP server (cwd)
 ```
+
+The architecture map (`.codegraph/map.html`) is an interactive view of the
+import graph: nodes are files (directories on repos over ~220 files), sized
+by symbol count and colored by top-level directory. Click a node to highlight
+what imports it and what it imports (toggle transitive reach), search with
+`/`, drag to pan, wheel to zoom. Self-contained HTML, works offline.
 
 The dashboard (`--no-open` to just write the file) lands in
 `.codegraph/dashboard.html`: token savings, per-tool usage, indexed languages

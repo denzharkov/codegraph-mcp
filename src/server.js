@@ -32,7 +32,7 @@ export async function createServer(root) {
   // Usage guidance ships with the server via MCP `instructions` — the client
   // (Claude Code) injects it automatically, so users need zero configuration.
   const server = new McpServer(
-    { name: 'codegraph', version: '0.7.0' },
+    { name: 'codegraph', version: '0.8.0' },
     {
       instructions: [
         'This server maintains a pre-built symbol graph of the repository. Prefer its tools over raw file reads and grep:',
@@ -85,13 +85,19 @@ export async function createServer(root) {
   registerTool(
     'repo_map',
     {
-      description: 'Project map: languages, symbol counts, key files ranked by import centrality. Call FIRST to orient.',
+      description: 'Project map: languages, symbol counts, key files ranked by import centrality. Call FIRST to orient. html=true also writes an interactive architecture map.',
       inputSchema: {
-        limit: z.number().int().min(1).max(100).optional().describe('Max files to show (default 25)')
+        limit: z.number().int().min(1).max(100).optional().describe('Max files to show (default 25)'),
+        html: z.boolean().optional().describe('Also write .codegraph/map.html (interactive import graph)')
       }
     },
-    async ({ limit = 25 }) => {
+    async ({ limit = 25, html = false }) => {
       await index.ensure();
+      if (html) {
+        const { writeArchMap } = await import('./archmap.js');
+        const file = await writeArchMap(root, index);
+        return text(`Interactive architecture map written to ${file} — open it in a browser.`);
+      }
       const g = index.graph;
       const stats = g.stats();
       const lines = [

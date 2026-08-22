@@ -5,6 +5,7 @@
 //   codegraph-mcp install               register in Claude Code (user scope)
 //   codegraph-mcp uninstall             remove the registration
 //   codegraph-mcp dashboard [--root <path>] [--no-open]  generate HTML report
+//   codegraph-mcp map [--root <path>] [--no-open]        interactive architecture map
 //   codegraph-mcp proxy [--port <n>]    transparent dedup proxy to the Anthropic API
 //   codegraph-mcp wrap [args...]        launch claude through the proxy (like cf wrap)
 import path from 'node:path';
@@ -53,10 +54,12 @@ if (command === 'index') {
   });
   server.close();
   process.exit(r.status ?? 0);
-} else if (command === 'dashboard') {
-  const { writeDashboard } = await import('../src/dashboard.js');
-  const file = await writeDashboard(root);
-  console.log(`Dashboard written to ${file}`);
+} else if (command === 'dashboard' || command === 'map') {
+  const file =
+    command === 'dashboard'
+      ? await (await import('../src/dashboard.js')).writeDashboard(root)
+      : await (await import('../src/archmap.js')).writeArchMap(root);
+  console.log(`${command === 'map' ? 'Architecture map' : 'Dashboard'} written to ${file}`);
   if (!args.includes('--no-open')) {
     const opener = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', file]] : process.platform === 'darwin' ? ['open', [file]] : ['xdg-open', [file]];
     spawnSync(opener[0], opener[1], { stdio: 'ignore' });
