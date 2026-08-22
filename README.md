@@ -25,6 +25,7 @@ compilation. `npm install` works identically on Windows, macOS and Linux.
 | `semantic_search` | Find code/notes **by meaning** ("where is auth token validated") |
 | `save_note` / `recall_notes` | Persistent per-repo notes that survive sessions |
 | `usage_stats` | Calls per tool + conservative estimate of tokens saved |
+| `generate_dashboard` | Self-contained HTML report (savings, usage, languages, central files) |
 
 Supported languages: JavaScript, TypeScript, TSX, Python, Go, Rust, Java,
 Ruby, C, C++, C#, PHP.
@@ -73,8 +74,14 @@ into the agent's context automatically on connect. Install, register, done.
 ```bash
 node bin/codegraph-mcp.js index                # index cwd, print stats
 node bin/codegraph-mcp.js index --root ~/proj  # index another directory
+node bin/codegraph-mcp.js dashboard            # HTML report, opens in browser
 node bin/codegraph-mcp.js                      # start stdio MCP server (cwd)
 ```
+
+The dashboard (`--no-open` to just write the file) lands in
+`.codegraph/dashboard.html`: token savings, per-tool usage, indexed languages
+and the most-imported files. Static HTML, no server, light/dark aware. The
+agent can also generate it on request via the `generate_dashboard` tool.
 
 ## How it works
 

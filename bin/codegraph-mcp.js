@@ -4,6 +4,7 @@
 //   codegraph-mcp index [--root <path>] build/refresh the index and print stats
 //   codegraph-mcp install               register in Claude Code (user scope)
 //   codegraph-mcp uninstall             remove the registration
+//   codegraph-mcp dashboard [--root <path>] [--no-open]  generate HTML report
 import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
@@ -29,6 +30,14 @@ if (command === 'index') {
       `${stats.files} files, ${stats.symbols} symbols, ${stats.calls} call edges`
   );
   console.log(`Languages: ${Object.entries(stats.byLang).map(([l, n]) => `${l}=${n}`).join(' ') || 'none'}`);
+} else if (command === 'dashboard') {
+  const { writeDashboard } = await import('../src/dashboard.js');
+  const file = await writeDashboard(root);
+  console.log(`Dashboard written to ${file}`);
+  if (!args.includes('--no-open')) {
+    const opener = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', file]] : process.platform === 'darwin' ? ['open', [file]] : ['xdg-open', [file]];
+    spawnSync(opener[0], opener[1], { stdio: 'ignore' });
+  }
 } else if (command === 'install' || command === 'uninstall') {
   const claudeArgs =
     command === 'install'

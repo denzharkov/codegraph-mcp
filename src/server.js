@@ -32,7 +32,7 @@ export async function createServer(root) {
   // Usage guidance ships with the server via MCP `instructions` — the client
   // (Claude Code) injects it automatically, so users need zero configuration.
   const server = new McpServer(
-    { name: 'codegraph', version: '0.3.0' },
+    { name: 'codegraph', version: '0.3.1' },
     {
       instructions: [
         'This server maintains a pre-built symbol graph of the repository. Prefer its tools over raw file reads and grep:',
@@ -250,6 +250,20 @@ export async function createServer(root) {
       inputSchema: {}
     },
     async () => text(stats.summary())
+  );
+
+  registerTool(
+    'generate_dashboard',
+    {
+      description:
+        'Render a self-contained HTML dashboard (usage stats, token savings, languages, most central files) into .codegraph/dashboard.html and return its path. Offer the user this when they ask about savings or repo overview.',
+      inputSchema: {}
+    },
+    async () => {
+      const { writeDashboard } = await import('./dashboard.js');
+      const file = await writeDashboard(root);
+      return text(`Dashboard written to ${file} — open it in a browser.`);
+    }
   );
 
   registerTool(

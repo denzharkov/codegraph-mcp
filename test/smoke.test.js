@@ -119,6 +119,7 @@ test('MCP stdio round-trip: tools list and calls work end-to-end', async () => {
       'find_callers',
       'find_references',
       'find_symbol',
+      'generate_dashboard',
       'read_symbol',
       'recall_notes',
       'reindex',
@@ -169,6 +170,16 @@ test('MCP stdio round-trip: tools list and calls work end-to-end', async () => {
   } finally {
     await client.close();
   }
+});
+
+test('dashboard renders usage stats and central files', async () => {
+  const { generateDashboard } = await import('../src/dashboard.js');
+  const html = await generateDashboard(fixtureDir);
+  assert.match(html, /Codegraph Dashboard/);
+  assert.match(html, /tokens saved vs full-file reads/);
+  assert.match(html, /javascript/);
+  assert.match(html, /src\/api\.js/, 'central files table lists imported module');
+  assert.ok(!html.includes('<script'), 'dashboard must be static HTML');
 });
 
 test('semantic_search finds code by meaning (or falls back to keywords)', { timeout: 120_000 }, async () => {
