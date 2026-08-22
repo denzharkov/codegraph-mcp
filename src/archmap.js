@@ -17,6 +17,38 @@ function topDir(relPath) {
   return i === -1 ? '.' : relPath.slice(0, i);
 }
 
+// Adaptive clustering: a directory that holds many files AND has its own
+// subdirectories splits one level deeper (src-layout projects otherwise
+// collapse into a single "src" bag that hides the real structure).
+function computeClusters(paths) {
+  const SPLIT = 12;
+  const MAXDEPTH = 4;
+  const out = new Map();
+  const rec = (list, prefix, depth) => {
+    const bySeg = new Map();
+    const here = [];
+    for (const p of list) {
+      const rest = prefix ? p.slice(prefix.length + 1) : p;
+      const i = rest.indexOf('/');
+      if (i === -1) here.push(p);
+      else {
+        const seg = rest.slice(0, i);
+        if (!bySeg.has(seg)) bySeg.set(seg, []);
+        bySeg.get(seg).push(p);
+      }
+    }
+    for (const p of here) out.set(p, prefix || '.');
+    for (const [seg, sub] of bySeg) {
+      const childPrefix = prefix ? prefix + '/' + seg : seg;
+      const hasSubdirs = sub.some((p) => p.slice(childPrefix.length + 1).includes('/'));
+      if (depth < MAXDEPTH && sub.length > SPLIT && hasSubdirs) rec(sub, childPrefix, depth + 1);
+      else for (const p of sub) out.set(p, childPrefix);
+    }
+  };
+  rec(paths, '', 1);
+  return out;
+}
+
 export async function collectMapData(root, liveIndex = null) {
   const index = liveIndex ?? new Index(root);
   await index.ensure();
@@ -29,6 +61,7 @@ export async function collectMapData(root, liveIndex = null) {
   const aggregated = fileCount > MAX_FILE_NODES;
 
   if (!aggregated) {
+    const clusterOf = computeClusters([...g.files.keys()]);
     for (const [file, rec] of g.files) {
       const syms = rec.symbols.filter((s) => !s.parent);
       // intra-file call pairs between named symbols, for the symbol level
@@ -46,7 +79,7 @@ export async function collectMapData(root, liveIndex = null) {
       }
       nodes.push({
         id: file,
-        cluster: topDir(file),
+        cluster: clusterOf.get(file) || topDir(file),
         lang: rec.lang,
         symbols: rec.symbols.length,
         top: syms
@@ -215,7 +248,15 @@ export async function generateArchMap(root, liveIndex = null) {
   clusterNames.sort();
   function colorVar(cluster) { var i = clusterNames.indexOf(cluster); return 'var(--c' + (i < 8 ? i + 1 : 0) + ')'; }
   function clusterFiles(c) { return nodes.filter(function (n) { return n.cluster === c; }); }
-  var cName = function (c) { return c === '.' ? 'root' : c; };
+  // display names: last path segment, widened to two segments on collisions
+  var displayName = {};
+  (function () {
+    var lastSeg = function (c, n) { return c === '.' ? 'root' : c.split('/').slice(-n).join('/'); };
+    var counts = {};
+    clusterNames.forEach(function (c) { var k = lastSeg(c, 1); counts[k] = (counts[k] || 0) + 1; });
+    clusterNames.forEach(function (c) { displayName[c] = lastSeg(c, counts[lastSeg(c, 1)] > 1 ? 2 : 1); });
+  })();
+  var cName = function (c) { return displayName[c] || c; };
   function shortName(id) {
     var parts = id.split('/');
     var base = parts[parts.length - 1];
