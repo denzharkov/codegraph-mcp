@@ -72,6 +72,27 @@ Both registrations are picked up by the VS Code extension automatically — it
 reads the same MCP configuration as the CLI. Check with `/mcp` inside Claude
 Code.
 
+## Teach the agent to prefer these tools
+
+Registering the server is not enough — agents habitually reach for raw file
+reads and grep. Add this to your project's `CLAUDE.md` (or the global
+`~/.claude/CLAUDE.md`) so the savings actually happen:
+
+```markdown
+## Codegraph tools
+
+When the codegraph MCP server is available, prefer its tools over raw reads:
+- Start with `repo_map` to orient in the repo instead of listing/reading files.
+- Before reading any file, call `file_skeleton`; read the full file only if
+  the skeleton is not enough.
+- To locate a definition use `find_symbol` (by name) or `semantic_search`
+  (by meaning) instead of grep.
+- Read a single function/class with `read_symbol` instead of the whole file.
+- Before changing a function's signature or behavior, run `analyze_impact`.
+- Persist non-obvious decisions with `save_note`; check `recall_notes` when
+  starting a task.
+```
+
 ## CLI usage
 
 ```bash
