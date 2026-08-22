@@ -118,10 +118,8 @@ test('MCP stdio round-trip: tools list and calls work end-to-end', async () => {
     assert.deepEqual(names, [
       'analyze_impact',
       'file_skeleton',
-      'find_callers',
       'find_references',
       'find_symbol',
-      'generate_dashboard',
       'read_symbol',
       'recall_notes',
       'reindex',
@@ -149,7 +147,7 @@ test('MCP stdio round-trip: tools list and calls work end-to-end', async () => {
     const refsText = refsRes.content[0].text;
     assert.match(refsText, /src\/db\.js:1.*\[definition\]/, 'definition marked');
     assert.match(refsText, /src\/api\.js:1/, 'import line found');
-    assert.match(refsText, /in function createUserHandler/, 'enclosing symbol annotated');
+    assert.match(refsText, /in function createUserHandler.*\[call\]/, 'call site marked with enclosing symbol');
 
     const whoRes = await client.callTool({ name: 'who_imports', arguments: { path: 'src/api.js' } });
     assert.match(whoRes.content[0].text, /src\/routes\.js/);
@@ -170,15 +168,13 @@ test('MCP stdio round-trip: tools list and calls work end-to-end', async () => {
       read_symbol: { name: 'saveUser' },
       file_skeleton: { path: 'src/db.js' },
       semantic_search: { query: 'save user' },
-      find_callers: { name: 'saveUser' },
       find_references: { name: 'saveUser' },
       who_imports: { path: 'src/api.js' },
       analyze_impact: { name: 'saveUser' },
       reindex: {},
       save_note: { text: 'minimal-args sweep note' },
       recall_notes: {},
-      usage_stats: {},
-      generate_dashboard: {}
+      usage_stats: {}
     };
     for (const t of tools.tools) {
       assert.ok(Object.hasOwn(minimalArgs, t.name), `no minimal-args case for new tool "${t.name}" — add one`);
@@ -213,6 +209,9 @@ test('MCP stdio round-trip: tools list and calls work end-to-end', async () => {
     assert.match(statsRes.content[0].text, /analyze_impact: 2 call/);
     assert.match(statsRes.content[0].text, /tokens saved/);
     assert.ok(!statsRes.content[0].text.includes('usage_stats:'), 'usage_stats must not record itself');
+
+    const dashRes = await client.callTool({ name: 'usage_stats', arguments: { dashboard: true } });
+    assert.match(dashRes.content[0].text, /dashboard\.html/, 'dashboard=true returns the report path');
   } finally {
     await client.close();
   }

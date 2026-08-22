@@ -139,6 +139,7 @@ export class Graph {
     const re = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
     const out = [];
     let truncated = false;
+    const nameLower = name.toLowerCase();
     for (const [file, rec] of this.files) {
       if (out.length >= limit) {
         truncated = true;
@@ -151,6 +152,7 @@ export class Graph {
         continue;
       }
       if (!re.test(src)) continue;
+      const callLines = new Set(rec.calls.filter((c) => c.callee.toLowerCase() === nameLower).map((c) => c.line));
       const lines = src.split('\n');
       for (let i = 0; i < lines.length; i++) {
         if (!re.test(lines[i])) continue;
@@ -163,7 +165,7 @@ export class Graph {
           }
         }
         const isDefinition = rec.symbols.some((s) => s.name === name && s.startLine === lineNo);
-        out.push({ file, line: lineNo, text: lines[i].trim().slice(0, 160), enclosing, isDefinition });
+        out.push({ file, line: lineNo, text: lines[i].trim().slice(0, 160), enclosing, isDefinition, isCall: callLines.has(lineNo) });
         if (out.length >= limit) {
           truncated = true;
           break;

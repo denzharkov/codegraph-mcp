@@ -32,7 +32,7 @@ export async function createServer(root) {
   // Usage guidance ships with the server via MCP `instructions` — the client
   // (Claude Code) injects it automatically, so users need zero configuration.
   const server = new McpServer(
-    { name: 'codegraph', version: '0.6.0' },
+    { name: 'codegraph', version: '0.7.0' },
     {
       instructions: [
         'This server maintains a pre-built symbol graph of the repository. Prefer its tools over raw file reads and grep:',
@@ -85,8 +85,7 @@ export async function createServer(root) {
   registerTool(
     'repo_map',
     {
-      description:
-        'Compact overview of the repository: languages, file/symbol counts, and the exported symbols of the most significant files. Use this FIRST to orient yourself instead of reading many files.',
+      description: 'Project map: languages, symbol counts, key files ranked by import centrality. Call FIRST to orient.',
       inputSchema: {
         limit: z.number().int().min(1).max(100).optional().describe('Max files to show (default 25)')
       }
@@ -136,8 +135,7 @@ export async function createServer(root) {
   registerTool(
     'find_symbol',
     {
-      description:
-        'Locate the definition of a function/class/method/type by name across the whole repo. Returns file:line, signature and container. Much cheaper than grep + reading files.',
+      description: 'Find a definition by name, repo-wide. Returns file:line, signature and container.',
       inputSchema: {
         name: z.string().describe('Symbol name (case-insensitive; substring match unless exact=true)'),
         exact: z.boolean().optional().describe('Exact name match only (default false)'),
@@ -156,8 +154,7 @@ export async function createServer(root) {
   registerTool(
     'read_symbol',
     {
-      description:
-        'Read the FULL source code of one symbol (function/class/method) without reading the whole file. Provide the symbol name; optionally the file path to disambiguate.',
+      description: 'Full source of ONE symbol (function/class/method) without reading the whole file.',
       inputSchema: {
         name: z.string().describe('Symbol name (exact, case-insensitive)'),
         file: z.string().optional().describe('Repo-relative file path to disambiguate'),
@@ -196,8 +193,7 @@ export async function createServer(root) {
   registerTool(
     'file_skeleton',
     {
-      description:
-        'Compact outline of a file: imports plus every symbol signature with line ranges, WITHOUT bodies. 10-50x fewer tokens than reading the file. Use before deciding what to read in full.',
+      description: 'File outline: imports + every signature with line ranges, no bodies. Use before reading a file in full.',
       inputSchema: {
         path: z.string().describe('Repo-relative file path')
       }
@@ -233,7 +229,7 @@ export async function createServer(root) {
     'semantic_search',
     {
       description:
-        'Search code symbols and/or notes BY MEANING, not by name: "where is auth token validated", "retry logic for http calls". Uses a local embedding model; falls back to keyword match if unavailable. Use when you do not know the exact symbol name.',
+        'Find code/notes BY MEANING ("where is auth token validated") when the exact name is unknown. Local embeddings; keyword fallback offline.',
       inputSchema: {
         query: z.string().describe('Natural-language description of what you are looking for'),
         scope: z.enum(['code', 'notes', 'all']).optional().describe('What to search (default code)'),
@@ -274,45 +270,19 @@ export async function createServer(root) {
   registerTool(
     'usage_stats',
     {
-      description: 'Show how much this server has been used and a conservative estimate of tokens saved.',
-      inputSchema: {}
-    },
-    async () => text(stats.summary())
-  );
-
-  registerTool(
-    'generate_dashboard',
-    {
-      description:
-        'Render a self-contained HTML dashboard (usage stats, token savings, languages, most central files) into .codegraph/dashboard.html and return its path. Offer the user this when they ask about savings or repo overview.',
-      inputSchema: {}
-    },
-    async () => {
-      const { writeDashboard } = await import('./dashboard.js');
-      const file = await writeDashboard(root, index); // reuse the live index
-      return text(`Dashboard written to ${file} — open it in a browser.`);
-    }
-  );
-
-  registerTool(
-    'find_callers',
-    {
-      description: 'List every call site of a function/method across the repo, with the enclosing caller symbol.',
+      description: 'Usage counters and estimated tokens saved. dashboard=true also writes an HTML report and returns its path.',
       inputSchema: {
-        name: z.string().describe('Called symbol name (exact, case-insensitive)'),
-        limit: z.number().int().min(1).max(200).optional()
+        dashboard: z.boolean().optional().describe('Also write .codegraph/dashboard.html')
       }
     },
-    async ({ name, limit = 50 }) => {
-      await index.ensure();
-      const callers = index.graph.findCallers(name, { limit });
-      if (callers.length === 0) return text(`No call sites of "${name}" found.`);
-      const lines = [`${callers.length} call site(s) of "${name}":`, ''];
-      for (const c of callers) {
-        const who = c.caller ? `${c.caller.name} (${c.caller.kind})` : '<module level>';
-        lines.push(`${c.file}:${c.line} — in ${who}`);
+    async ({ dashboard = false }) => {
+      let out = stats.summary();
+      if (dashboard) {
+        const { writeDashboard } = await import('./dashboard.js');
+        const file = await writeDashboard(root, index); // reuse the live index
+        out += `\n\nDashboard written to ${file} — open it in a browser.`;
       }
-      return text(lines.join('\n'));
+      return text(out);
     }
   );
 
@@ -320,7 +290,7 @@ export async function createServer(root) {
     'find_references',
     {
       description:
-        'Every textual mention of an identifier across the repo (types, variables, imports — not just calls), each annotated with the enclosing symbol. Word-boundary and case-sensitive, so much more precise than grep.',
+        'Every mention of an identifier repo-wide (calls marked [call], plus types, variables, imports), with the enclosing symbol. Word-boundary, case-sensitive.',
       inputSchema: {
         name: z.string().describe('Identifier to find (exact, case-sensitive)'),
         limit: z.number().int().min(1).max(300).optional()
@@ -333,8 +303,8 @@ export async function createServer(root) {
       const lines = [`${refs.length} reference(s) to "${name}"${truncated ? ' (truncated)' : ''}:`, ''];
       for (const r of refs) {
         const where = r.enclosing ? ` — in ${r.enclosing.kind} ${r.enclosing.name}` : '';
-        const def = r.isDefinition ? ' [definition]' : '';
-        lines.push(`${r.file}:${r.line}${where}${def}\n   ${r.text}`);
+        const marker = r.isDefinition ? ' [definition]' : r.isCall ? ' [call]' : '';
+        lines.push(`${r.file}:${r.line}${where}${marker}\n   ${r.text}`);
       }
       return text(lines.join('\n'));
     }
@@ -343,8 +313,7 @@ export async function createServer(root) {
   registerTool(
     'who_imports',
     {
-      description:
-        'List the files that import a given module/file — the direct dependents. Use to gauge how central a module is before touching it, or to find where a module is wired in.',
+      description: 'Files that import a given module — its direct dependents.',
       inputSchema: {
         path: z.string().describe('Repo-relative path of the module/file')
       }
@@ -374,8 +343,7 @@ export async function createServer(root) {
   registerTool(
     'analyze_impact',
     {
-      description:
-        'Transitive impact analysis: who calls X, who calls the callers, etc. Use BEFORE changing a function signature or behavior to see the blast radius.',
+      description: 'Transitive callers of a symbol — the blast radius. Run BEFORE changing a signature or behavior.',
       inputSchema: {
         name: z.string().describe('Symbol name to analyze (exact, case-insensitive)'),
         depth: z.number().int().min(1).max(5).optional().describe('Max caller depth (default 3)')
@@ -426,8 +394,7 @@ export async function createServer(root) {
   registerTool(
     'save_note',
     {
-      description:
-        'Persist a short project note (decision, gotcha, convention) that survives across sessions. Keep it to 1-3 sentences.',
+      description: 'Save a short project note (decision, gotcha, convention) that survives across sessions.',
       inputSchema: {
         text: z.string().min(3).describe('The note text'),
         tags: z.array(z.string()).optional().describe('Optional tags for recall')
@@ -442,8 +409,7 @@ export async function createServer(root) {
   registerTool(
     'recall_notes',
     {
-      description:
-        'Retrieve previously saved project notes. With a query — the most relevant first; without arguments — the most recent ones. Safe to call at the start of any task.',
+      description: 'Saved project notes: most relevant first with a query, newest first without. Safe to call argless at task start.',
       inputSchema: {
         query: z.string().optional().describe('What are you working on / looking for (omit for the latest notes)'),
         limit: z.number().int().min(1).max(20).optional()

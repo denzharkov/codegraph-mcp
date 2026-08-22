@@ -38,8 +38,7 @@ compilation. `npm install` works identically on Windows, macOS and Linux.
 | Tool | What it does |
 |---|---|
 | `analyze_impact` | Transitive callers (blast radius) before changing a function |
-| `find_callers` | Every call site of a symbol, with the enclosing caller |
-| `find_references` | Every textual mention of an identifier, annotated with enclosing symbol |
+| `find_references` | Every mention of an identifier — call sites marked `[call]` — with the enclosing symbol |
 | `who_imports` | Direct dependents of a module (reverse import graph) |
 
 **Focused reading**
@@ -55,8 +54,7 @@ compilation. `npm install` works identically on Windows, macOS and Linux.
 |---|---|
 | `save_note` / `recall_notes` | Persistent per-repo notes that survive sessions |
 | `reindex` | Force incremental or full re-scan |
-| `usage_stats` | Calls per tool + conservative estimate of tokens saved |
-| `generate_dashboard` | Self-contained HTML report (savings, usage, languages, central files) |
+| `usage_stats` | Calls per tool + tokens saved; `dashboard=true` also writes the HTML report |
 
 Supported languages: JavaScript, TypeScript, TSX, Python, Go, Rust, Java,
 Ruby, C, C++, C#, PHP, GDScript. Files the indexer cannot extract are counted
@@ -153,7 +151,7 @@ node bin/codegraph-mcp.js                      # start stdio MCP server (cwd)
 The dashboard (`--no-open` to just write the file) lands in
 `.codegraph/dashboard.html`: token savings, per-tool usage, indexed languages
 and the most-imported files. Static HTML, no server, light/dark aware. The
-agent can also generate it on request via the `generate_dashboard` tool.
+agent can also generate it on request via `usage_stats` with `dashboard=true`.
 
 ## How it works
 
