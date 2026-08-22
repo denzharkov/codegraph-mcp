@@ -1,0 +1,23 @@
+{
+  "name": "codegraph-mcp",
+  "version": "0.1.0",
+  "description": "Local MCP server for Claude Code (CLI & VS Code): tree-sitter repo graph, symbol search, impact analysis, compact AST skeletons and session notes. Pure JS + WASM, no native builds.",
+  "type": "module",
+  "bin": {
+    "codegraph-mcp": "bin/codegraph-mcp.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node bin/codegraph-mcp.js",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "tree-sitter-wasms": "^0.1.13",
+    "web-tree-sitter": "~0.24.7",
+    "zod": "^3.25.0"
+  },
+  "license": "MIT"
+}
