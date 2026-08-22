@@ -149,11 +149,20 @@ node bin/codegraph-mcp.js map                  # interactive architecture map
 node bin/codegraph-mcp.js                      # start stdio MCP server (cwd)
 ```
 
-The architecture map (`.codegraph/map.html`) is an interactive view of the
-import graph: nodes are files (directories on repos over ~220 files), sized
-by symbol count and colored by top-level directory. Click a node to highlight
-what imports it and what it imports (toggle transitive reach), search with
-`/`, drag to pan, wheel to zoom. Self-contained HTML, works offline.
+The architecture map (`.codegraph/map.html`) is a layered, C4-style view of
+the repo, fully derived from the index:
+
+- **Overview** — subsystem cards (top-level directories) with weighted import
+  edges between them, plus auto-derived starting points (hub, entry point,
+  largest module);
+- **Subsystem** — the files of one directory with their import edges and
+  collapsed neighbor subsystems; click a file to trace dependents and
+  dependencies, click again to drill in;
+- **File** — its symbols with intra-file call arrows, importers and imports
+  as navigable columns.
+
+Levels are deep-linkable (`#c=src`, `#f=src/proxy.js`), search with `/`,
+`Esc` goes up a level, drag pans, wheel zooms. Self-contained HTML, offline.
 
 The dashboard (`--no-open` to just write the file) lands in
 `.codegraph/dashboard.html`: token savings, per-tool usage, indexed languages

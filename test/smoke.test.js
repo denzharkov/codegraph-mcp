@@ -286,6 +286,16 @@ test('gdscript extractor finds funcs, signals, classes and calls', async () => {
   assert.equal(byName._health.exported, false);
 });
 
+test('js extractor captures dynamic import() and require() as imports', async () => {
+  const { extractFile } = await import('../src/extract.js');
+  const src = "import fs from 'fs';\nasync function load() {\n  const { Index } = await import('../src/indexer.js');\n  const legacy = require('./legacy.js');\n  return new Index(legacy);\n}\n";
+  const r = await extractFile('javascript', src);
+  assert.ok(r.imports.includes('fs'), 'static import');
+  assert.ok(r.imports.includes('../src/indexer.js'), 'dynamic import()');
+  assert.ok(r.imports.includes('./legacy.js'), 'require()');
+  assert.ok(!r.calls.some((c) => c.callee === 'require'), 'require not misfiled as a call');
+});
+
 test('architecture map embeds the import graph as self-contained HTML', async () => {
   const { generateArchMap, collectMapData } = await import('../src/archmap.js');
   const data = await collectMapData(fixtureDir);

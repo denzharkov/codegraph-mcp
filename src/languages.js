@@ -95,6 +95,18 @@ const jsSpec = {
   importTypes: new Set(['import_statement']),
   importText(node, src) {
     return stripQuotes(fieldText(node, 'source', src));
+  },
+  // dynamic import('x') and require('x') arrive as call_expressions
+  importFromCall(node, src) {
+    const fn = node.childForFieldName('function');
+    if (!fn) return null;
+    const isImport = fn.type === 'import';
+    const isRequire = fn.type === 'identifier' && src.slice(fn.startIndex, fn.endIndex) === 'require';
+    if (!isImport && !isRequire) return null;
+    const args = node.childForFieldName('arguments');
+    const arg = args?.namedChild(0);
+    if (!arg || arg.type !== 'string') return null;
+    return stripQuotes(src.slice(arg.startIndex, arg.endIndex));
   }
 };
 

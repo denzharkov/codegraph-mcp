@@ -59,10 +59,15 @@ export async function extractFile(langId, src) {
         popAfter = true;
       }
     } else if (spec.callTypes.has(node.type)) {
-      const callee = spec.callee(node, src);
-      if (callee) {
-        const caller = [...stack].reverse().find((s) => s.symIndex >= 0);
-        calls.push({ caller: caller ? caller.symIndex : -1, callee, line: node.startPosition.row + 1 });
+      const dynImport = spec.importFromCall ? spec.importFromCall(node, src) : null;
+      if (dynImport) {
+        imports.push(dynImport);
+      } else {
+        const callee = spec.callee(node, src);
+        if (callee) {
+          const caller = [...stack].reverse().find((s) => s.symIndex >= 0);
+          calls.push({ caller: caller ? caller.symIndex : -1, callee, line: node.startPosition.row + 1 });
+        }
       }
     } else if (spec.importTypes.has(node.type)) {
       const imp = spec.importText(node, src);
