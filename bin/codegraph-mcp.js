@@ -5,6 +5,8 @@
 //   codegraph-mcp install               register in Claude Code (user scope)
 //   codegraph-mcp uninstall             remove the registration
 //   codegraph-mcp dashboard [--root <path>] [--no-open]  generate HTML report
+//   codegraph-mcp proxy [--port <n>]    transparent dedup proxy to the Anthropic API
+//   codegraph-mcp wrap [args...]        launch claude through the proxy (like cf wrap)
 import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
@@ -30,6 +32,27 @@ if (command === 'index') {
       `${stats.files} files, ${stats.symbols} symbols, ${stats.calls} call edges`
   );
   console.log(`Languages: ${Object.entries(stats.byLang).map(([l, n]) => `${l}=${n}`).join(' ') || 'none'}`);
+} else if (command === 'proxy') {
+  const { startProxy } = await import('../src/proxy.js');
+  const port = Number(argValue(args, '--port')) || 3210;
+  const upstream = argValue(args, '--upstream') || process.env.CODEGRAPH_UPSTREAM || 'https://api.anthropic.com';
+  await startProxy({ port, upstream });
+  console.error(`\nPoint Claude Code at it:\n  CLI:     ANTHROPIC_BASE_URL=http://127.0.0.1:${port} claude`);
+  console.error(`  VS Code: add to .claude/settings.json -> {"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:${port}"}}`);
+} else if (command === 'wrap') {
+  const { startProxy } = await import('../src/proxy.js');
+  const port = Number(argValue(args, '--port')) || 3210;
+  const server = await startProxy({ port, quiet: true });
+  console.error(`[codegraph-proxy] on http://127.0.0.1:${port}; launching claude...`);
+  const claudeArgs = args.filter((a, i) => !(a === '--port' || args[i - 1] === '--port'));
+  const quote = (s) => (/[\s"]/.test(s) ? `"${s.replace(/"/g, '\\"')}"` : s);
+  const r = spawnSync(['claude', ...claudeArgs].map(quote).join(' '), {
+    stdio: 'inherit',
+    shell: true,
+    env: { ...process.env, ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}` }
+  });
+  server.close();
+  process.exit(r.status ?? 0);
 } else if (command === 'dashboard') {
   const { writeDashboard } = await import('../src/dashboard.js');
   const file = await writeDashboard(root);

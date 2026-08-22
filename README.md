@@ -69,6 +69,38 @@ guidance ("prefer `file_skeleton` over reading files, `find_symbol` over
 grep, …") through the MCP `instructions` field, which Claude Code injects
 into the agent's context automatically on connect. Install, register, done.
 
+## Transparent proxy (guaranteed savings)
+
+The MCP tools above save tokens only when the agent chooses to use them. The
+proxy layer works the other way — like ContextForge, it sits between Claude
+Code and the Anthropic API and compresses traffic **regardless of agent
+behavior**:
+
+- **History deduplication**: when the conversation contains identical
+  tool results (the same file read twice, repeated command output), every
+  occurrence after the first is replaced with a short stub before the request
+  leaves your machine. The first occurrence stays verbatim, so the model
+  loses nothing it could actually use — and the prompt-cache prefix is
+  preserved (only the new tail is ever rewritten, so dedup never causes
+  cache misses on old turns).
+- Auth headers pass through untouched (API key or OAuth). Anything the proxy
+  cannot parse is forwarded verbatim. Streaming (SSE) is piped through.
+
+```bash
+codegraph-mcp wrap                 # like 'cf wrap claude': proxy + claude in one command
+codegraph-mcp proxy --port 3210    # or run the proxy standalone
+```
+
+For the VS Code extension, run the proxy and point the extension at it via
+project or global settings:
+
+```json
+{ "env": { "ANTHROPIC_BASE_URL": "http://127.0.0.1:3210" } }
+```
+
+Cumulative savings are tracked in `~/.codegraph/proxy-stats.json` and printed
+on proxy start.
+
 ## CLI usage
 
 ```bash
