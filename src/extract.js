@@ -2,6 +2,7 @@
 import { LANGUAGES } from './languages.js';
 import { getLanguage, parseWith } from './parsers.js';
 import { REGEX_LANGS } from './regexlangs.js';
+import { attachDocs } from './docs.js';
 
 const MAX_NODES = 400_000;
 
@@ -16,7 +17,7 @@ function signatureOf(node, src) {
 }
 
 export async function extractFile(langId, src) {
-  if (REGEX_LANGS[langId]) return REGEX_LANGS[langId](src);
+  if (REGEX_LANGS[langId]) return attachDocs(REGEX_LANGS[langId](src), src, langId);
   const lang = LANGUAGES[langId];
   if (!lang) return null;
   const language = await getLanguage(lang.grammar);
@@ -85,5 +86,5 @@ export async function extractFile(langId, src) {
   } finally {
     tree.delete();
   }
-  return { symbols, calls, imports };
+  return attachDocs({ symbols, calls, imports }, src, langId);
 }

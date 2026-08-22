@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Index } from './indexer.js';
 import { buildReverseImports } from './imports.js';
+import { readmeSummary } from './docs.js';
 
 // symbol/call detail travels for the most-imported files only, so the map
 // stays file-level on any repo size without a multi-megabyte payload
@@ -90,13 +91,14 @@ export async function collectMapData(root, liveIndex = null) {
       id: file,
       cluster: clusterOf.get(file) || topDir(file),
       lang: rec.lang,
+      ...(rec.doc ? { doc: rec.doc } : {}),
       symbols: rec.symbols.length,
       top: syms
         .sort((a, b) => Number(b.exported) - Number(a.exported))
         .slice(0, 10)
         .map((s) => `${s.kind} ${s.name}${s.exported ? ' *' : ''}`),
       syms: withDetail
-        ? rec.symbols.slice(0, 40).map((s) => ({ n: s.name, k: s.kind, l: s.startLine, e: s.exported ? 1 : 0, p: s.parent || null }))
+        ? rec.symbols.slice(0, 40).map((s) => ({ n: s.name, k: s.kind, l: s.startLine, e: s.exported ? 1 : 0, p: s.parent || null, ...(s.doc ? { d: s.doc } : {}) }))
         : [],
       calls: callPairs
     });
@@ -104,7 +106,43 @@ export async function collectMapData(root, liveIndex = null) {
   for (const [target, importers] of reverse) {
     for (const imp of importers) edges.push([imp, target]);
   }
-  return { nodes, edges, fileCount, detailCapped: fileCount > DETAIL_CAP, root };
+
+  // directory descriptions: README first, else the doc of the package's own
+  // entry file (__init__.py / index.*) — so folder cards can say what the
+  // folder is FOR, not just how many files it holds
+  const dirSet = new Set(['']);
+  for (const file of g.files.keys()) {
+    const parts = file.split('/');
+    for (let i = 1; i < parts.length; i++) dirSet.add(parts.slice(0, i).join('/'));
+  }
+  const dirDocs = {};
+  let repoDoc = null;
+  for (const dir of dirSet) {
+    let doc = null;
+    for (const rn of ['README.md', 'readme.md', 'Readme.md', 'README.rst']) {
+      const p = path.join(root, dir, rn);
+      try {
+        if (fs.existsSync(p)) doc = readmeSummary(fs.readFileSync(p, 'utf8'));
+      } catch {
+        /* unreadable README is not an error */
+      }
+      if (doc) break;
+    }
+    if (!doc) {
+      for (const cand of ['__init__.py', 'index.js', 'index.ts', 'index.tsx', 'mod.rs', 'main.py', '__main__.py']) {
+        const rec = g.files.get(dir ? dir + '/' + cand : cand);
+        if (rec && rec.doc) {
+          doc = rec.doc;
+          break;
+        }
+      }
+    }
+    if (doc) {
+      if (dir) dirDocs[dir] = doc;
+      else repoDoc = doc;
+    }
+  }
+  return { nodes, edges, fileCount, detailCapped: fileCount > DETAIL_CAP, root, dirDocs, repoDoc };
 }
 
 export async function generateArchMap(root, liveIndex = null) {
@@ -183,6 +221,9 @@ export async function generateArchMap(root, liveIndex = null) {
   @keyframes flow { to { stroke-dashoffset:-11; } }
   @media (prefers-reduced-motion: reduce) { .edge.up, .edge.down { animation:none; } }
   .elabel { font:10px system-ui,sans-serif; fill:var(--muted); paint-order:stroke; stroke:var(--page); stroke-width:3px; stroke-linejoin:round; }
+  .filedoc { font:11.5px system-ui,sans-serif; fill:var(--ink2); }
+  #panel .doc { color:var(--ink2); font-size:12.5px; margin:6px 0; line-height:1.45; }
+  #panel li b { font-weight:600; }
   .dim { opacity:.13; }
 </style>
 <div id="bar">
@@ -214,6 +255,7 @@ export async function generateArchMap(root, liveIndex = null) {
   function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
 
   var nodes = DATA.nodes, edges = DATA.edges;
+  var dirDocs = DATA.dirDocs || {}, repoDoc = DATA.repoDoc || null;
   var byId = {}; nodes.forEach(function (n) { byId[n.id] = n; });
   edges = edges.filter(function (e) { return byId[e[0]] && byId[e[1]] && e[0] !== e[1]; });
   var inb = {}, outb = {};
@@ -240,7 +282,7 @@ export async function generateArchMap(root, liveIndex = null) {
     var parts = id.split('/');
     var base = parts[parts.length - 1];
     // __init__.py / index.js alone say nothing — include the package dir
-    if (/^(__init__\.|index\.)/.test(base) && parts.length > 1) return parts[parts.length - 2] + '/' + base;
+    if (/^(__init__\\.|index\\.)/.test(base) && parts.length > 1) return parts[parts.length - 2] + '/' + base;
     return base;
   }
 
@@ -335,6 +377,7 @@ export async function generateArchMap(root, liveIndex = null) {
     return g;
   }
   function truncate(s, n) { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+  function plur(n, w) { return n + ' ' + w + (n === 1 ? '' : 's'); }
 
   // ---- directory view: one recursive renderer for every level ----
   // At any path it shows the IMMEDIATE children: subdirectory cards with
@@ -348,7 +391,7 @@ export async function generateArchMap(root, liveIndex = null) {
   function layersPanelHtml() {
     var cOut = {};
     Object.keys(cAgg).forEach(function (key) {
-      var parts = key.split(' ');
+      var parts = key.split('\\u0000');
       (cOut[parts[0]] = cOut[parts[0]] || []).push(parts[1]);
     });
     var depthMemo = {};
@@ -363,7 +406,7 @@ export async function generateArchMap(root, liveIndex = null) {
       return best;
     }
     var layered = {};
-    var connected = clusterNames.filter(function (c) { return cOut[c] || Object.keys(cAgg).some(function (k) { return k.split(' ')[1] === c; }); });
+    var connected = clusterNames.filter(function (c) { return cOut[c] || Object.keys(cAgg).some(function (k) { return k.split('\\u0000')[1] === c; }); });
     connected.forEach(function (c) { var d = cDepth(c, {}); (layered[d] = layered[d] || []).push(c); });
     var layerRows = Object.keys(layered).map(Number).sort(function (a, b) { return b - a; }).map(function (d) {
       var names = layered[d].map(function (c) {
@@ -577,7 +620,7 @@ export async function generateArchMap(root, liveIndex = null) {
       chips['f:' + n.id] = chip(r.x, r.y, r.w, truncate(shortName(n.id), 24), n.symbols, slotOf(shortName(n.id)), function () {
         if (selected === n.id) { location.hash = '#f=' + n.id; return; }
         selectInDir(n, chips, edgeRefs, prefix);
-      }, n.id);
+      }, n.id + (n.doc ? ' — ' + n.doc : ''));
     });
     dirList.forEach(function (d) {
       var r = rect['d:' + d.seg];
@@ -590,23 +633,43 @@ export async function generateArchMap(root, liveIndex = null) {
       var title = el('text', 'title', g);
       title.setAttribute('x', r.x + 26); title.setAttribute('y', r.y + 20); title.textContent = truncate(d.label || d.seg, 22);
       var sub = el('text', 'sub', g);
-      sub.setAttribute('x', r.x + 12); sub.setAttribute('y', r.y + 39); sub.textContent = d.files + ' files · ' + d.symbols + ' symbols';
+      sub.setAttribute('x', r.x + 12); sub.setAttribute('y', r.y + 39); sub.textContent = plur(d.files, 'file') + ' · ' + plur(d.symbols, 'symbol');
       var open = el('text', 'mini', g);
-      open.setAttribute('x', r.x + 12); open.setAttribute('y', r.y + 54); open.textContent = 'open →';
-      var tt = el('title', null, g); tt.textContent = d.path;
+      open.setAttribute('x', r.x + 12); open.setAttribute('y', r.y + 54);
+      open.textContent = dirDocs[d.path] ? truncate(dirDocs[d.path], 30) : 'open →';
+      var tt = el('title', null, g);
+      tt.textContent = d.path + (dirDocs[d.path] ? ' — ' + dirDocs[d.path] : '');
       g.addEventListener('click', function (ev) { ev.stopPropagation(); if (!moved) location.hash = '#d=' + encodeURIComponent(d.path); });
       chips['d:' + d.seg] = g;
       grow(r.x, r.y, r.w, r.h);
     });
 
     // ---- panel ----
+    // no folder-level doc? attribute the doc of the folder's hub file instead
+    function hubDoc(dirPath) {
+      var best = null;
+      nodes.forEach(function (n) {
+        if (n.id.indexOf(dirPath + '/') !== 0 || !n.doc) return;
+        if (!best || n.deg > best.deg) best = n;
+      });
+      return best ? shortName(best.id) + ': ' + best.doc : null;
+    }
+    var fileRows = files.slice().sort(function (a, b) { return b.deg - a.deg; }).slice(0, 16).map(function (n) {
+      return '<li class="link" data-nav="#f=' + esc(n.id) + '"><b>' + esc(shortName(n.id)) + '</b>' +
+        (n.doc ? ' — ' + esc(truncate(n.doc, 70)) : '') + '</li>';
+    }).join('');
     var dirRows = dirList.map(function (d) {
-      return '<li class="link" data-nav="#d=' + esc(d.path) + '">' + esc(d.label || d.seg) + ' — ' + d.files + ' files</li>';
+      var note = dirDocs[d.path] ? esc(truncate(dirDocs[d.path], 70))
+        : hubDoc(d.path) ? esc(truncate(hubDoc(d.path), 78))
+        : plur(d.files, 'file');
+      return '<li class="link" data-nav="#d=' + esc(d.path) + '"><b>' + esc(d.label || d.seg) + '</b> — ' + note + '</li>';
     }).join('');
     if (!prefix) {
       setPanel(
         '<h2>' + esc(DATA.root) + '</h2>' +
         '<p class="meta">' + DATA.fileCount + ' files · ' + edges.length + ' import edges</p>' +
+        (repoDoc ? '<p class="doc">' + esc(repoDoc) + '</p>' : '') +
+        (dirRows ? '<h3>Subsystems</h3><ul>' + dirRows + '</ul>' : '') +
         layersPanelHtml() +
         startHereHtml() +
         '<h3>How to read</h3><p class="hint">Cards are folders (numbers count imports between them), chips are files at this level. Click a folder to descend — any depth. Click a file to trace, twice to open symbols. Search <span class="kbd">/</span> · up <span class="kbd">Esc</span>.</p>'
@@ -615,7 +678,9 @@ export async function generateArchMap(root, liveIndex = null) {
       setPanel(
         '<h2>' + esc(prefix) + '</h2>' +
         '<p class="meta">' + files.length + ' files here · ' + dirList.length + ' subfolders</p>' +
+        (dirDocs[prefix] ? '<p class="doc">' + esc(dirDocs[prefix]) + '</p>' : '') +
         (dirRows ? '<h3>Subfolders</h3><ul>' + dirRows + '</ul>' : '') +
+        (fileRows ? '<h3>Files</h3><ul>' + fileRows + '</ul>' : '') +
         '<p class="hint">Click a file to trace its imports; click it again to open its symbols. Right-hand chips lead outside this folder.</p>'
       );
     }
@@ -650,6 +715,7 @@ export async function generateArchMap(root, liveIndex = null) {
     setPanel(
       '<h2>' + esc(n.id) + '</h2>' +
       '<p class="meta">' + esc(n.lang) + ' · ' + n.symbols + ' symbols · <span class="link" data-nav="#f=' + esc(n.id) + '">open symbols →</span></p>' +
+      (n.doc ? '<p class="doc">' + esc(n.doc) + '</p>' : '') +
       '<h3 style="color:var(--up)">Imported by · ' + ups.length + '</h3>' +
       (ups.length ? '<ul>' + ups.slice(0, 12).map(li).join('') + '</ul>' : '<p class="hint">nothing in-repo</p>') +
       '<h3 style="color:var(--down)">Imports · ' + dns.length + '</h3>' +
@@ -670,20 +736,37 @@ export async function generateArchMap(root, liveIndex = null) {
     });
     var midX = 250;
     var lb2 = el('text', 'clusterlabel'); lb2.setAttribute('x', midX); lb2.setAttribute('y', 20); lb2.textContent = n.id + ' · ' + n.symbols + ' symbols';
+    var symY = colY;
+    if (n.doc) {
+      // wrap the file description to at most two lines above the symbols
+      var words = n.doc.split(' '), docLines = [], lineBuf = '';
+      words.forEach(function (w) {
+        if (lineBuf && (lineBuf + ' ' + w).length > 74) { docLines.push(lineBuf); lineBuf = w; }
+        else lineBuf = lineBuf ? lineBuf + ' ' + w : w;
+      });
+      if (lineBuf) docLines.push(lineBuf);
+      docLines.slice(0, 2).forEach(function (ln, i) {
+        var dt = el('text', 'filedoc');
+        dt.setAttribute('x', midX); dt.setAttribute('y', symY + 8 + i * 16); dt.textContent = ln;
+        grow(midX, symY + i * 16 - 4, ln.length * 5.7, 16);
+      });
+      symY += Math.min(docLines.length, 2) * 16 + 12;
+    }
     var symRect = {};
     var symW = 190, symCols = 2;
     var elided = (!n.syms || n.syms.length === 0) && n.symbols > 0;
     if (elided) {
       var note = el('text', 'clusterlabel');
-      note.setAttribute('x', midX); note.setAttribute('y', colY + 14);
+      note.setAttribute('x', midX); note.setAttribute('y', symY + 14);
       note.textContent = 'symbol detail elided on this repo size — ask the agent for file_skeleton';
-      grow(midX, colY, 430, 20);
+      grow(midX, symY, 430, 20);
     }
     (n.syms || []).forEach(function (s, i) {
       var label = truncate((s.p ? s.p + '.' : '') + s.n, 24);
-      var x = midX + (i % symCols) * (symW + 46), y = colY + Math.floor(i / symCols) * 34;
+      var x = midX + (i % symCols) * (symW + 46), y = symY + Math.floor(i / symCols) * 34;
       symRect[s.n] = { x: x, y: y, w: symW, h: 26 };
-      chip(x, y, symW, label, s.l, KIND_COLOR[s.k] || 'var(--c0)', null, s.k + ' ' + s.n + (s.e ? ' (exported)' : '') + ' — line ' + s.l);
+      chip(x, y, symW, label, s.l, KIND_COLOR[s.k] || 'var(--c0)', null,
+        s.k + ' ' + s.n + (s.e ? ' (exported)' : '') + ' — line ' + s.l + (s.d ? '\\n' + s.d : ''));
     });
     (n.calls || []).forEach(function (pair) {
       var ra = symRect[pair[0]], rb = symRect[pair[1]];
@@ -696,12 +779,16 @@ export async function generateArchMap(root, liveIndex = null) {
     });
     var kinds = {};
     (n.syms || []).forEach(function (s) { kinds[s.k] = (kinds[s.k] || 0) + 1; });
+    var docSyms = (n.syms || []).filter(function (s) { return s.d; }).slice(0, 14);
     setPanel(
       '<h2>' + esc(n.id) + '</h2>' +
       '<p class="meta">' + esc(n.lang) + ' · ' + n.symbols + ' symbols · ' + (n.calls || []).length + ' internal call edges</p>' +
+      (n.doc ? '<p class="doc">' + esc(n.doc) + '</p>' : '') +
       (elided
         ? '<p class="hint">Symbol detail is embedded only for the ' + ${DETAIL_CAP} + ' most-imported files on large repos; importers and imports are still complete.</p>'
-        : '<h3>Kinds</h3><ul>' + Object.keys(kinds).sort().map(function (k) { return '<li>' + esc(k) + ' — ' + kinds[k] + '</li>'; }).join('') + '</ul>') +
+        : docSyms.length
+          ? '<h3>What they do</h3><ul>' + docSyms.map(function (s) { return '<li><b>' + esc((s.p ? s.p + '.' : '') + s.n) + '</b> — ' + esc(s.d) + '</li>'; }).join('') + '</ul>'
+          : '<h3>Kinds</h3><ul>' + Object.keys(kinds).sort().map(function (k) { return '<li>' + esc(k) + ' — ' + kinds[k] + '</li>'; }).join('') + '</ul>') +
       '<p class="hint">Chips are symbols (number = line); curved arrows are calls inside this file. Side columns navigate to neighbor files.</p>'
     );
   }

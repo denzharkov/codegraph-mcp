@@ -161,7 +161,12 @@ the repo, fully derived from the index:
 - **File** — its symbols with intra-file call arrows, importers and imports
   as navigable columns.
 
-Levels are deep-linkable (`#c=src`, `#f=src/proxy.js`), search with `/`,
+Every level narrates *purpose*, not just structure: descriptions are pulled
+from the code's own documentation — module docstrings and header comments for
+files and symbols, READMEs / `__init__.py` / `index.*` for folders and the
+repo itself — and shown on folder cards, in tooltips and in the side panel.
+
+Levels are deep-linkable (`#d=src`, `#f=src/proxy.js`), search with `/`,
 `Esc` goes up a level, drag pans, wheel zooms. Self-contained HTML, offline.
 
 The dashboard (`--no-open` to just write the file) lands in

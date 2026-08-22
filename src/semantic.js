@@ -92,7 +92,7 @@ export function symbolItems(graph) {
   const items = [];
   for (const [file, rec] of graph.files) {
     for (const sym of rec.symbols) {
-      const text = `${sym.kind} ${sym.name}${sym.parent ? ' in ' + sym.parent : ''}: ${sym.signature} (file ${file})`;
+      const text = `${sym.kind} ${sym.name}${sym.parent ? ' in ' + sym.parent : ''}: ${sym.signature}${sym.doc ? ' — ' + sym.doc : ''} (file ${file})`;
       items.push({ key: hashKey(text), text, sym: { ...sym, file } });
     }
   }

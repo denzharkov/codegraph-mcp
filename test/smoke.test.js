@@ -388,3 +388,45 @@ test('semantic_search finds code by meaning (or falls back to keywords)', { time
     );
   }
 });
+
+test('doc extraction: module, symbol and directory descriptions reach the map', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-docs-'));
+  try {
+    const write = (rel, content) => {
+      const abs = path.join(dir, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, content);
+    };
+    write('README.md', '# Demo\n\nA tiny payments demo service.\n');
+    write('pay/__init__.py', '"""Payment processing package."""\n');
+    write(
+      'pay/charge.py',
+      '"""Charge cards via the gateway."""\n\n' +
+        'def charge(amount):\n    """Charge the given amount once."""\n    return amount\n\n' +
+        '# Retry a failed charge with backoff.\ndef retry(n):\n    return n\n'
+    );
+    // blank line between header and def => file doc, not symbol doc
+    write('web.js', '// Serves the HTTP API for payments.\n\nexport function serve() {}\n');
+
+    const { Index } = await import('../src/indexer.js');
+    const index = new Index(dir);
+    await index.ensure();
+    const charge = index.graph.files.get('pay/charge.py');
+    assert.equal(charge.doc, 'Charge cards via the gateway.');
+    assert.equal(charge.symbols.find((s) => s.name === 'charge').doc, 'Charge the given amount once.');
+    assert.equal(charge.symbols.find((s) => s.name === 'retry').doc, 'Retry a failed charge with backoff.');
+    const web = index.graph.files.get('web.js');
+    assert.equal(web.doc, 'Serves the HTTP API for payments.');
+    assert.equal(web.symbols.find((s) => s.name === 'serve').doc, undefined, 'detached header must not become symbol doc');
+
+    const { collectMapData } = await import('../src/archmap.js');
+    const data = await collectMapData(dir, index);
+    assert.match(data.repoDoc, /tiny payments demo/);
+    assert.equal(data.dirDocs['pay'], 'Payment processing package.', '__init__ docstring describes the folder');
+    const node = data.nodes.find((n) => n.id === 'pay/charge.py');
+    assert.equal(node.doc, 'Charge cards via the gateway.');
+    assert.equal(node.syms.find((s) => s.n === 'charge').d, 'Charge the given amount once.');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});

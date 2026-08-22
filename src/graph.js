@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const INDEX_VERSION = 1;
+const INDEX_VERSION = 2; // v2: file/symbol doc summaries
 
 export class Graph {
   constructor(root) {

@@ -61,6 +61,7 @@ export class Index {
           mtimeMs: file.mtimeMs,
           size: file.size,
           lang: file.lang,
+          doc: extracted.doc || null,
           imports: extracted.imports,
           symbols: extracted.symbols,
           calls: extracted.calls
