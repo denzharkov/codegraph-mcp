@@ -151,3 +151,65 @@ test('proxy forwards requests with dedup, streams responses, passes auth', async
     upstream.close();
   }
 });
+
+test('grounding: the newest human message gains repo facts; history stays byte-stable', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-ground-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'pay'));
+    fs.writeFileSync(
+      path.join(dir, 'pay', 'charge.py'),
+      '"""Charge cards via the gateway."""\n\ndef charge(amount):\n    """Charge the given amount once."""\n    return amount\n'
+    );
+    const { Index } = await import('../src/indexer.js');
+    const index = new Index(dir);
+    await index.ensure();
+
+    const { buildGroundingBlock, groundHistory } = await import('../src/ground.js');
+
+    // exact-case symbol match -> fact with location and doc
+    const block = buildGroundingBlock(index.graph, 'почини charge чтобы не падал');
+    assert.match(block, /charge — function, pay\/charge\.py:3-5/);
+    assert.match(block, /Charge the given amount once\./);
+    // deterministic
+    assert.equal(block, buildGroundingBlock(index.graph, 'почини charge чтобы не падал'));
+    // wrong case / unknown identifiers -> no block
+    assert.equal(buildGroundingBlock(index.graph, 'почини Charge пожалуйста'), null);
+    assert.equal(buildGroundingBlock(index.graph, 'сделай красиво'), null);
+    // file mentions ground too
+    assert.match(buildGroundingBlock(index.graph, 'посмотри pay/charge.py'), /python, 1 symbols — Charge cards/);
+
+    // fresh user turn (last message) gets the block...
+    const memo = new Map();
+    const turn1 = { messages: [{ role: 'user', content: 'почини charge' }] };
+    const g1 = groundHistory(turn1, index.graph, memo);
+    assert.ok(g1.addedChars > 0);
+    assert.match(g1.body.messages[0].content, /codegraph context/);
+    assert.equal(turn1.messages[0].content, 'почини charge', 'input not mutated');
+
+    // ...and on the NEXT request (agentic loop appended messages) the same
+    // turn re-attaches the identical bytes from the memo
+    const turn2 = {
+      messages: [
+        { role: 'user', content: 'почини charge' },
+        { role: 'assistant', content: [{ type: 'text', text: 'смотрю' }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: [{ type: 'text', text: 'ok' }] }] }
+      ]
+    };
+    const g2 = groundHistory(turn2, index.graph, memo);
+    assert.equal(g2.body.messages[0].content, g1.body.messages[0].content, 'history byte-stable');
+    assert.equal(
+      g2.body.messages[2].content[0].type, 'tool_result',
+      'tool_result carriers are never grounded'
+    );
+
+    // an old human turn the proxy never grounded stays untouched (cache safety)
+    const memo2 = new Map();
+    const g3 = groundHistory(turn2, index.graph, memo2);
+    assert.equal(g3.body.messages[0].content, 'почини charge', 'unknown history left alone');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});

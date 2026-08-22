@@ -73,9 +73,10 @@ class ProxyStats {
     }
   }
 
-  record(savedChars) {
+  record(savedChars, addedChars = 0) {
     this.data.requests++;
     this.data.charsSaved += savedChars;
+    if (addedChars > 0) this.data.charsGrounded = (this.data.charsGrounded || 0) + addedChars;
     try {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
       fs.writeFileSync(this.file, JSON.stringify(this.data));
@@ -86,20 +87,63 @@ class ProxyStats {
 
   summary() {
     const tok = Math.round(this.data.charsSaved / 4);
-    return `${this.data.requests} request(s) proxied, ~${tok} input tokens deduplicated since ${this.data.since.slice(0, 10)}`;
+    const ground = Math.round((this.data.charsGrounded || 0) / 4);
+    return (
+      `${this.data.requests} request(s) proxied, ~${tok} input tokens deduplicated` +
+      (ground > 0 ? `, ~${ground} tokens of grounding attached` : '') +
+      ` since ${this.data.since.slice(0, 10)}`
+    );
   }
 }
 
-/** Full transform pipeline: skeletonize stale reads, then dedupe identicals. */
-export async function transformRequestBody(parsed) {
+/**
+ * Full transform pipeline: ground the newest human message with facts from
+ * the symbol graph, skeletonize stale reads, then dedupe identicals.
+ * ctx = {graph, memo} enables grounding; without it the pipeline is
+ * shrink-only (as in tests and older callers).
+ */
+export async function transformRequestBody(parsed, ctx = {}) {
+  let grounded = parsed;
+  let addedChars = 0;
+  if (ctx.graph && ctx.memo) {
+    const { groundHistory } = await import('./ground.js');
+    const g = groundHistory(parsed, ctx.graph, ctx.memo);
+    grounded = g.body;
+    addedChars = g.addedChars;
+  }
   const { skeletonizeStaleReads } = await import('./transforms.js');
-  const skel = await skeletonizeStaleReads(parsed);
+  const skel = await skeletonizeStaleReads(grounded);
   const ded = dedupeHistory(skel.body);
-  return { body: ded.body, savedChars: skel.savedChars + ded.savedChars };
+  return { body: ded.body, savedChars: skel.savedChars + ded.savedChars, addedChars };
 }
 
-export function startProxy({ port = 3210, upstream = 'https://api.anthropic.com', quiet = false } = {}) {
+export function startProxy({ port = 3210, upstream = 'https://api.anthropic.com', quiet = false, root = null } = {}) {
   const stats = new ProxyStats();
+
+  // Grounding needs the symbol graph. It loads lazily on the first request
+  // and refreshes with the built-in throttle; any failure (no code, no
+  // grammars) simply disables grounding — the proxy still shrinks.
+  const memo = new Map();
+  let indexPromise = null;
+  const getGraph = async () => {
+    if (!root) return null;
+    if (!indexPromise) {
+      indexPromise = (async () => {
+        const { Index } = await import('./indexer.js');
+        const ix = new Index(root);
+        await ix.ensure();
+        return ix;
+      })().catch(() => null);
+    }
+    const ix = await indexPromise;
+    if (!ix) return null;
+    try {
+      await ix.refresh({});
+    } catch {
+      // stale graph is still a valid graph
+    }
+    return ix.graph;
+  };
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -107,13 +151,15 @@ export function startProxy({ port = 3210, upstream = 'https://api.anthropic.com'
       for await (const c of req) chunks.push(c);
       let bodyBuf = chunks.length > 0 ? Buffer.concat(chunks) : null;
       let saved = 0;
+      let added = 0;
 
       if (req.method === 'POST' && req.url.startsWith('/v1/messages') && bodyBuf) {
         try {
           const parsed = JSON.parse(bodyBuf.toString('utf8'));
-          const result = await transformRequestBody(parsed);
+          const result = await transformRequestBody(parsed, { graph: await getGraph(), memo });
           saved = result.savedChars;
-          if (saved > 0) bodyBuf = Buffer.from(JSON.stringify(result.body));
+          added = result.addedChars || 0;
+          if (saved > 0 || added > 0) bodyBuf = Buffer.from(JSON.stringify(result.body));
         } catch {
           // not JSON we understand — forward verbatim
         }
@@ -147,9 +193,12 @@ export function startProxy({ port = 3210, upstream = 'https://api.anthropic.com'
       }
       res.end();
 
-      stats.record(saved);
-      if (!quiet && saved > 0) {
-        console.error(`[codegraph-proxy] deduplicated ~${Math.round(saved / 4)} input tokens on this request`);
+      stats.record(saved, added);
+      if (!quiet && (saved > 0 || added > 0)) {
+        const parts = [];
+        if (saved > 0) parts.push(`deduplicated ~${Math.round(saved / 4)} input tokens`);
+        if (added > 0) parts.push(`grounded the prompt with repo facts (+${Math.round(added / 4)} tokens)`);
+        console.error(`[codegraph-proxy] ${parts.join('; ')}`);
       }
     } catch (e) {
       if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json' });

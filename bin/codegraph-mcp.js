@@ -37,13 +37,13 @@ if (command === 'index') {
   const { startProxy } = await import('../src/proxy.js');
   const port = Number(argValue(args, '--port')) || 3210;
   const upstream = argValue(args, '--upstream') || process.env.CODEGRAPH_UPSTREAM || 'https://api.anthropic.com';
-  await startProxy({ port, upstream });
+  await startProxy({ port, upstream, root });
   console.error(`\nPoint Claude Code at it:\n  CLI:     ANTHROPIC_BASE_URL=http://127.0.0.1:${port} claude`);
   console.error(`  VS Code: add to .claude/settings.json -> {"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:${port}"}}`);
 } else if (command === 'wrap') {
   const { startProxy } = await import('../src/proxy.js');
   const port = Number(argValue(args, '--port')) || 3210;
-  const server = await startProxy({ port, quiet: true });
+  const server = await startProxy({ port, quiet: true, root });
   console.error(`[codegraph-proxy] on http://127.0.0.1:${port}; launching claude...`);
   const claudeArgs = args.filter((a, i) => !(a === '--port' || args[i - 1] === '--port'));
   const quote = (s) => (/[\s"]/.test(s) ? `"${s.replace(/"/g, '\\"')}"` : s);

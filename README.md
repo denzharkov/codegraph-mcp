@@ -121,6 +121,14 @@ behavior**:
   truncation. Transforms are pure functions of the content, so repeated
   requests produce identical bytes and the prompt cache re-stabilizes after
   a single rewrite.
+- **Prompt grounding**: your message is transformed *before* it reaches the
+  model — the safe way. The words are never rewritten; instead the proxy
+  appends a clearly-labeled block of verifiable facts about the identifiers
+  the message mentions (kind, `file:lines`, one-line doc from the symbol
+  graph). The model starts oriented instead of spending tool round-trips
+  discovering the same facts. Only exact-case matches ground, only the newest
+  message gets a fresh block, and blocks are memoized so history stays
+  byte-stable for the prompt cache.
 - Auth headers pass through untouched (API key or OAuth). Anything the proxy
   cannot parse is forwarded verbatim. Streaming (SSE) is piped through.
 
