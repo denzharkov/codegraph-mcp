@@ -8,6 +8,7 @@ import { Index } from './indexer.js';
 import { Notes } from './memory.js';
 import { Stats } from './stats.js';
 import { VectorStore, symbolItems, noteItems, semanticSearch } from './semantic.js';
+import { buildReverseImports } from './imports.js';
 
 function text(s, counterfactualChars = null) {
   const res = { content: [{ type: 'text', text: s }] };
@@ -31,7 +32,7 @@ export async function createServer(root) {
   // Usage guidance ships with the server via MCP `instructions` — the client
   // (Claude Code) injects it automatically, so users need zero configuration.
   const server = new McpServer(
-    { name: 'codegraph', version: '0.2.1' },
+    { name: 'codegraph', version: '0.3.0' },
     {
       instructions: [
         'This server maintains a pre-built symbol graph of the repository. Prefer its tools over raw file reads and grep:',
@@ -39,6 +40,7 @@ export async function createServer(root) {
         '- Before reading any source file, call file_skeleton; read the full file only if the skeleton is not enough.',
         '- To locate a definition use find_symbol (by name) or semantic_search (by meaning) instead of grep.',
         '- Read a single function/class with read_symbol instead of the whole file.',
+        '- Use find_references for every mention of an identifier, who_imports to see which files depend on a module.',
         "- Before changing a function's signature or behavior, run analyze_impact.",
         '- Persist non-obvious decisions with save_note; check recall_notes when starting a task.'
       ].join('\n')
@@ -78,16 +80,26 @@ export async function createServer(root) {
         `Languages: ${Object.entries(stats.byLang).map(([l, n]) => `${l} (${n})`).join(', ') || 'none'}`,
         ''
       ];
+      const reverse = buildReverseImports(g);
       const ranked = [...g.files.entries()]
-        .map(([file, rec]) => ({ file, rec, weight: rec.symbols.filter((s) => s.exported).length * 2 + rec.symbols.length }))
+        .map(([file, rec]) => ({
+          file,
+          rec,
+          inbound: reverse.get(file)?.size || 0,
+          weight:
+            (reverse.get(file)?.size || 0) * 3 +
+            rec.symbols.filter((s) => s.exported).length * 2 +
+            rec.symbols.length
+        }))
         .sort((a, b) => b.weight - a.weight)
         .slice(0, limit);
-      for (const { file, rec } of ranked) {
+      for (const { file, rec, inbound } of ranked) {
         const names = rec.symbols
           .filter((s) => !s.parent)
           .slice(0, 12)
           .map((s) => `${s.name}${s.kind === 'class' || s.kind === 'struct' || s.kind === 'interface' ? `(${s.kind})` : ''}`);
-        lines.push(`${file}: ${names.join(', ')}${rec.symbols.length > 12 ? ', …' : ''}`);
+        const inb = inbound > 0 ? ` [imported by ${inbound}]` : '';
+        lines.push(`${file}${inb}: ${names.join(', ')}${rec.symbols.length > 12 ? ', …' : ''}`);
       }
       return text(lines.join('\n'));
     }
@@ -259,6 +271,61 @@ export async function createServer(root) {
         lines.push(`${c.file}:${c.line} — in ${who}`);
       }
       return text(lines.join('\n'));
+    }
+  );
+
+  registerTool(
+    'find_references',
+    {
+      description:
+        'Every textual mention of an identifier across the repo (types, variables, imports — not just calls), each annotated with the enclosing symbol. Word-boundary and case-sensitive, so much more precise than grep.',
+      inputSchema: {
+        name: z.string().describe('Identifier to find (exact, case-sensitive)'),
+        limit: z.number().int().min(1).max(300).optional()
+      }
+    },
+    async ({ name, limit = 80 }) => {
+      await index.ensure();
+      const { refs, truncated } = index.graph.findReferences(name, { limit });
+      if (refs.length === 0) return text(`No references to "${name}" found in indexed files.`);
+      const lines = [`${refs.length} reference(s) to "${name}"${truncated ? ' (truncated)' : ''}:`, ''];
+      for (const r of refs) {
+        const where = r.enclosing ? ` — in ${r.enclosing.kind} ${r.enclosing.name}` : '';
+        const def = r.isDefinition ? ' [definition]' : '';
+        lines.push(`${r.file}:${r.line}${where}${def}\n   ${r.text}`);
+      }
+      return text(lines.join('\n'));
+    }
+  );
+
+  registerTool(
+    'who_imports',
+    {
+      description:
+        'List the files that import a given module/file — the direct dependents. Use to gauge how central a module is before touching it, or to find where a module is wired in.',
+      inputSchema: {
+        path: z.string().describe('Repo-relative path of the module/file')
+      }
+    },
+    async ({ path: relPath }) => {
+      await index.ensure();
+      const norm = relPath.replace(/\\/g, '/');
+      let key = index.graph.files.has(norm) ? norm : null;
+      if (!key) {
+        for (const f of index.graph.files.keys()) {
+          if (f.endsWith(norm)) {
+            key = f;
+            break;
+          }
+        }
+      }
+      if (!key) return text(`File "${relPath}" is not in the index.`);
+      const reverse = buildReverseImports(index.graph);
+      const importers = [...(reverse.get(key) || [])].sort();
+      if (importers.length === 0) {
+        return text(`No indexed files import ${key} (entry point, or imported dynamically/externally).`);
+      }
+      return text(`${importers.length} file(s) import ${key}:\n` + importers.map((f) => `  ${f}`).join('\n'));
     }
   );
 

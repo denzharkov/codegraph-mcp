@@ -18,6 +18,8 @@ compilation. `npm install` works identically on Windows, macOS and Linux.
 | `read_symbol` | Read the full source of *one* symbol without reading the file |
 | `file_skeleton` | Imports + all signatures of a file, no bodies (10–50× fewer tokens) |
 | `find_callers` | Every call site of a symbol, with the enclosing caller |
+| `find_references` | Every textual mention of an identifier, annotated with enclosing symbol |
+| `who_imports` | Direct dependents of a module (reverse import graph) |
 | `analyze_impact` | Transitive callers (blast radius) before changing a function |
 | `reindex` | Force incremental or full re-scan |
 | `semantic_search` | Find code/notes **by meaning** ("where is auth token validated") |

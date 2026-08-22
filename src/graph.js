@@ -130,6 +130,49 @@ export class Graph {
     return { layers, total, truncated: total >= limit };
   }
 
+  /**
+   * Every textual mention of an identifier across indexed files (word-boundary,
+   * case-sensitive), annotated with the enclosing symbol. Complements
+   * findCallers: also finds type usages, variable refs, imports/exports.
+   */
+  findReferences(name, { limit = 100 } = {}) {
+    const re = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+    const out = [];
+    let truncated = false;
+    for (const [file, rec] of this.files) {
+      if (out.length >= limit) {
+        truncated = true;
+        break;
+      }
+      let src;
+      try {
+        src = fs.readFileSync(path.join(this.root, file), 'utf8');
+      } catch {
+        continue;
+      }
+      if (!re.test(src)) continue;
+      const lines = src.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (!re.test(lines[i])) continue;
+        const lineNo = i + 1;
+        // innermost enclosing symbol
+        let enclosing = null;
+        for (const s of rec.symbols) {
+          if (s.startLine <= lineNo && lineNo <= s.endLine && (!enclosing || s.startLine >= enclosing.startLine)) {
+            enclosing = s;
+          }
+        }
+        const isDefinition = rec.symbols.some((s) => s.name === name && s.startLine === lineNo);
+        out.push({ file, line: lineNo, text: lines[i].trim().slice(0, 160), enclosing, isDefinition });
+        if (out.length >= limit) {
+          truncated = true;
+          break;
+        }
+      }
+    }
+    return { refs: out, truncated };
+  }
+
   stats() {
     let symbols = 0;
     let calls = 0;

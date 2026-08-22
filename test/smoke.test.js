@@ -117,6 +117,7 @@ test('MCP stdio round-trip: tools list and calls work end-to-end', async () => {
       'analyze_impact',
       'file_skeleton',
       'find_callers',
+      'find_references',
       'find_symbol',
       'read_symbol',
       'recall_notes',
@@ -124,7 +125,8 @@ test('MCP stdio round-trip: tools list and calls work end-to-end', async () => {
       'repo_map',
       'save_note',
       'semantic_search',
-      'usage_stats'
+      'usage_stats',
+      'who_imports'
     ]);
 
     const findRes = await client.callTool({ name: 'find_symbol', arguments: { name: 'saveUser', exact: true } });
@@ -139,6 +141,18 @@ test('MCP stdio round-trip: tools list and calls work end-to-end', async () => {
 
     const impactRes = await client.callTool({ name: 'analyze_impact', arguments: { name: 'saveUser' } });
     assert.match(impactRes.content[0].text, /registerRoutes/);
+
+    const refsRes = await client.callTool({ name: 'find_references', arguments: { name: 'saveUser' } });
+    const refsText = refsRes.content[0].text;
+    assert.match(refsText, /src\/db\.js:1.*\[definition\]/, 'definition marked');
+    assert.match(refsText, /src\/api\.js:1/, 'import line found');
+    assert.match(refsText, /in function createUserHandler/, 'enclosing symbol annotated');
+
+    const whoRes = await client.callTool({ name: 'who_imports', arguments: { path: 'src/api.js' } });
+    assert.match(whoRes.content[0].text, /src\/routes\.js/);
+
+    const mapRes = await client.callTool({ name: 'repo_map', arguments: {} });
+    assert.match(mapRes.content[0].text, /src\/db\.js \[imported by 1\]/);
 
     const noteRes = await client.callTool({ name: 'save_note', arguments: { text: 'saveUser validates before persisting', tags: ['db'] } });
     assert.match(noteRes.content[0].text, /Saved note/);
