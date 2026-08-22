@@ -20,7 +20,9 @@ compilation. `npm install` works identically on Windows, macOS and Linux.
 | `find_callers` | Every call site of a symbol, with the enclosing caller |
 | `analyze_impact` | Transitive callers (blast radius) before changing a function |
 | `reindex` | Force incremental or full re-scan |
+| `semantic_search` | Find code/notes **by meaning** ("where is auth token validated") |
 | `save_note` / `recall_notes` | Persistent per-repo notes that survive sessions |
+| `usage_stats` | Calls per tool + conservative estimate of tokens saved |
 
 Supported languages: JavaScript, TypeScript, TSX, Python, Go, Rust, Java,
 Ruby, C, C++, C#, PHP.
@@ -88,6 +90,11 @@ node bin/codegraph-mcp.js                      # start stdio MCP server (cwd)
   refreshes are incremental (mtime+size) and throttled, so queries stay fast.
 - `node_modules`, build output, vendored and minified files are skipped;
   simple root `.gitignore` patterns are honored.
+- `semantic_search` uses a local embedding model (all-MiniLM-L6-v2 via
+  transformers.js, an *optional* dependency). On first use it downloads
+  ~25 MB into `~/.codegraph/models` and caches symbol vectors per repo in
+  `.codegraph/vectors.bin`. Offline or without the dependency it silently
+  falls back to keyword search — everything else works regardless.
 
 Add `.codegraph/` to your project's `.gitignore` (it's a cache plus your
 private notes).

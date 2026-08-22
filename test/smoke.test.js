@@ -119,7 +119,9 @@ test('MCP stdio round-trip: tools list and calls work end-to-end', async () => {
       'recall_notes',
       'reindex',
       'repo_map',
-      'save_note'
+      'save_note',
+      'semantic_search',
+      'usage_stats'
     ]);
 
     const findRes = await client.callTool({ name: 'find_symbol', arguments: { name: 'saveUser', exact: true } });
@@ -139,7 +141,32 @@ test('MCP stdio round-trip: tools list and calls work end-to-end', async () => {
     assert.match(noteRes.content[0].text, /Saved note/);
     const recallRes = await client.callTool({ name: 'recall_notes', arguments: { query: 'how does saveUser work' } });
     assert.match(recallRes.content[0].text, /validates before persisting/);
+
+    const statsRes = await client.callTool({ name: 'usage_stats', arguments: {} });
+    assert.match(statsRes.content[0].text, /read_symbol: 1 call/);
+    assert.match(statsRes.content[0].text, /tokens saved/);
   } finally {
     await client.close();
+  }
+});
+
+test('semantic_search finds code by meaning (or falls back to keywords)', { timeout: 120_000 }, async () => {
+  const { createServer } = await import('../src/server.js');
+  const { server } = await createServer(fixtureDir);
+  void server; // tools are exercised through direct module APIs below
+
+  const { VectorStore, symbolItems, semanticSearch } = await import('../src/semantic.js');
+  const { Index } = await import('../src/indexer.js');
+  const index = new Index(fixtureDir);
+  await index.ensure();
+  const store = new VectorStore(fixtureDir);
+  const { mode, results } = await semanticSearch(store, 'store a user record in the database', symbolItems(index.graph), 3);
+  assert.ok(['semantic', 'keyword'].includes(mode));
+  assert.ok(results.length > 0, 'expected at least one result');
+  if (mode === 'semantic') {
+    assert.ok(
+      results.some((r) => ['saveUser', 'persist'].includes(r.item.sym.name)),
+      `expected saveUser/persist in top results, got: ${results.map((r) => r.item.sym.name).join(', ')}`
+    );
   }
 });

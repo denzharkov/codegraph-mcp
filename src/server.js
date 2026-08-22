@@ -6,6 +6,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { Index } from './indexer.js';
 import { Notes } from './memory.js';
+import { Stats } from './stats.js';
+import { VectorStore, symbolItems, noteItems, semanticSearch } from './semantic.js';
 
 function text(s) {
   return { content: [{ type: 'text', text: s }] };
@@ -21,8 +23,10 @@ function fmtSymbol(sym, i = null) {
 export async function createServer(root) {
   const index = new Index(root);
   const notes = new Notes(root);
+  const stats = new Stats(root);
+  const vectors = new VectorStore(root);
 
-  const server = new McpServer({ name: 'codegraph', version: '0.1.0' });
+  const server = new McpServer({ name: 'codegraph', version: '0.2.0' });
 
   server.registerTool(
     'repo_map',
@@ -113,7 +117,9 @@ export async function createServer(root) {
         return text(`Cannot read ${sym.file}: ${e.message}`);
       }
       const lines = src.split('\n').slice(sym.startLine - 1, sym.endLine);
-      return text(`${sym.file}:${sym.startLine}-${sym.endLine} — ${sym.kind} ${sym.name}\n\n${lines.join('\n')}`);
+      const out = `${sym.file}:${sym.startLine}-${sym.endLine} — ${sym.kind} ${sym.name}\n\n${lines.join('\n')}`;
+      stats.record('read_symbol', out.length, src.length);
+      return text(out);
     }
   );
 
@@ -148,8 +154,63 @@ export async function createServer(root) {
         const indent = s.parent ? '  ' : '';
         lines.push(`${indent}${s.startLine}-${s.endLine} ${s.signature}${s.exported ? '  [exported]' : ''}`);
       }
-      return text(lines.join('\n'));
+      const out = lines.join('\n');
+      stats.record('file_skeleton', out.length, rec.size);
+      return text(out);
     }
+  );
+
+  server.registerTool(
+    'semantic_search',
+    {
+      description:
+        'Search code symbols and/or notes BY MEANING, not by name: "where is auth token validated", "retry logic for http calls". Uses a local embedding model; falls back to keyword match if unavailable. Use when you do not know the exact symbol name.',
+      inputSchema: {
+        query: z.string().describe('Natural-language description of what you are looking for'),
+        scope: z.enum(['code', 'notes', 'all']).optional().describe('What to search (default code)'),
+        limit: z.number().int().min(1).max(30).optional()
+      }
+    },
+    async ({ query, scope = 'code', limit = 8 }) => {
+      await index.ensure();
+      notes.load();
+      const lines = [];
+      if (scope === 'code' || scope === 'all') {
+        const items = symbolItems(index.graph);
+        if (items.length === 0) {
+          lines.push('No symbols indexed.');
+        } else {
+          const { mode, results, truncated } = await semanticSearch(vectors, query, items, limit);
+          lines.push(`Top code matches (${mode} search${truncated ? ', index partially embedded — call again to embed more' : ''}):`, '');
+          results.forEach((r, i) => lines.push(fmtSymbol(r.item.sym, i) + `\n   relevance: ${r.score.toFixed(2)}`, ''));
+          if (results.length === 0) lines.push('(nothing relevant found)', '');
+        }
+      }
+      if (scope === 'notes' || scope === 'all') {
+        const items = noteItems(notes.notes);
+        if (items.length > 0) {
+          const { results } = await semanticSearch(vectors, query, items, Math.min(limit, 5));
+          if (results.length > 0) {
+            lines.push('Related notes:', '');
+            for (const r of results) lines.push(`#${r.item.note.id}: ${r.item.note.text}`);
+          }
+        } else if (scope === 'notes') {
+          lines.push('No notes saved yet.');
+        }
+      }
+      const out = lines.join('\n');
+      stats.record('semantic_search', out.length);
+      return text(out);
+    }
+  );
+
+  server.registerTool(
+    'usage_stats',
+    {
+      description: 'Show how much this server has been used and a conservative estimate of tokens saved.',
+      inputSchema: {}
+    },
+    async () => text(stats.summary())
   );
 
   server.registerTool(
@@ -246,7 +307,15 @@ export async function createServer(root) {
       }
     },
     async ({ query, limit = 5 }) => {
-      const found = notes.recall(query, limit);
+      notes.load();
+      let found;
+      if (notes.notes.length === 0) {
+        found = [];
+      } else {
+        const { results } = await semanticSearch(vectors, query, noteItems(notes.notes), limit);
+        found = results.map((r) => r.item.note);
+        if (found.length === 0) found = notes.recall(query, limit);
+      }
       if (found.length === 0) return text('No matching notes.');
       return text(
         found
