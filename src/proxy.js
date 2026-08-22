@@ -90,6 +90,14 @@ class ProxyStats {
   }
 }
 
+/** Full transform pipeline: skeletonize stale reads, then dedupe identicals. */
+export async function transformRequestBody(parsed) {
+  const { skeletonizeStaleReads } = await import('./transforms.js');
+  const skel = await skeletonizeStaleReads(parsed);
+  const ded = dedupeHistory(skel.body);
+  return { body: ded.body, savedChars: skel.savedChars + ded.savedChars };
+}
+
 export function startProxy({ port = 3210, upstream = 'https://api.anthropic.com', quiet = false } = {}) {
   const stats = new ProxyStats();
 
@@ -103,7 +111,7 @@ export function startProxy({ port = 3210, upstream = 'https://api.anthropic.com'
       if (req.method === 'POST' && req.url.startsWith('/v1/messages') && bodyBuf) {
         try {
           const parsed = JSON.parse(bodyBuf.toString('utf8'));
-          const result = dedupeHistory(parsed);
+          const result = await transformRequestBody(parsed);
           saved = result.savedChars;
           if (saved > 0) bodyBuf = Buffer.from(JSON.stringify(result.body));
         } catch {

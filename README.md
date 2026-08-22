@@ -83,6 +83,13 @@ behavior**:
   loses nothing it could actually use — and the prompt-cache prefix is
   preserved (only the new tail is ever rewritten, so dedup never causes
   cache misses on old turns).
+- **Stale-read skeletonization**: when a file was read, edited, and read
+  again, the older full copy in history is replaced by its tree-sitter
+  signature skeleton (imports + declarations with line ranges); the newest
+  read always stays verbatim. Non-code files fall back to head+tail
+  truncation. Transforms are pure functions of the content, so repeated
+  requests produce identical bytes and the prompt cache re-stabilizes after
+  a single rewrite.
 - Auth headers pass through untouched (API key or OAuth). Anything the proxy
   cannot parse is forwarded verbatim. Streaming (SSE) is piped through.
 
