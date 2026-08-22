@@ -9,8 +9,10 @@ import { Notes } from './memory.js';
 import { Stats } from './stats.js';
 import { VectorStore, symbolItems, noteItems, semanticSearch } from './semantic.js';
 
-function text(s) {
-  return { content: [{ type: 'text', text: s }] };
+function text(s, counterfactualChars = null) {
+  const res = { content: [{ type: 'text', text: s }] };
+  if (counterfactualChars !== null) res.counterfactualChars = counterfactualChars;
+  return res;
 }
 
 function fmtSymbol(sym, i = null) {
@@ -28,7 +30,21 @@ export async function createServer(root) {
 
   const server = new McpServer({ name: 'codegraph', version: '0.2.0' });
 
-  server.registerTool(
+  // Every tool call is recorded; handlers may pass a counterfactual size to
+  // text() when a direct "vs reading the whole file" comparison exists.
+  // usage_stats itself is excluded so reading the report doesn't skew it.
+  const registerTool = (name, def, handler) =>
+    server.registerTool(name, def, async (args) => {
+      const res = await handler(args ?? {});
+      if (name !== 'usage_stats') {
+        const chars = (res.content || []).reduce((n, c) => n + (c.text?.length || 0), 0);
+        stats.record(name, chars, res.counterfactualChars ?? null);
+        delete res.counterfactualChars;
+      }
+      return res;
+    });
+
+  registerTool(
     'repo_map',
     {
       description:
@@ -62,7 +78,7 @@ export async function createServer(root) {
     }
   );
 
-  server.registerTool(
+  registerTool(
     'find_symbol',
     {
       description:
@@ -82,7 +98,7 @@ export async function createServer(root) {
     }
   );
 
-  server.registerTool(
+  registerTool(
     'read_symbol',
     {
       description:
@@ -118,12 +134,11 @@ export async function createServer(root) {
       }
       const lines = src.split('\n').slice(sym.startLine - 1, sym.endLine);
       const out = `${sym.file}:${sym.startLine}-${sym.endLine} — ${sym.kind} ${sym.name}\n\n${lines.join('\n')}`;
-      stats.record('read_symbol', out.length, src.length);
-      return text(out);
+      return text(out, src.length);
     }
   );
 
-  server.registerTool(
+  registerTool(
     'file_skeleton',
     {
       description:
@@ -155,12 +170,11 @@ export async function createServer(root) {
         lines.push(`${indent}${s.startLine}-${s.endLine} ${s.signature}${s.exported ? '  [exported]' : ''}`);
       }
       const out = lines.join('\n');
-      stats.record('file_skeleton', out.length, rec.size);
-      return text(out);
+      return text(out, rec.size);
     }
   );
 
-  server.registerTool(
+  registerTool(
     'semantic_search',
     {
       description:
@@ -198,13 +212,11 @@ export async function createServer(root) {
           lines.push('No notes saved yet.');
         }
       }
-      const out = lines.join('\n');
-      stats.record('semantic_search', out.length);
-      return text(out);
+      return text(lines.join('\n'));
     }
   );
 
-  server.registerTool(
+  registerTool(
     'usage_stats',
     {
       description: 'Show how much this server has been used and a conservative estimate of tokens saved.',
@@ -213,7 +225,7 @@ export async function createServer(root) {
     async () => text(stats.summary())
   );
 
-  server.registerTool(
+  registerTool(
     'find_callers',
     {
       description: 'List every call site of a function/method across the repo, with the enclosing caller symbol.',
@@ -235,7 +247,7 @@ export async function createServer(root) {
     }
   );
 
-  server.registerTool(
+  registerTool(
     'analyze_impact',
     {
       description:
@@ -261,7 +273,7 @@ export async function createServer(root) {
     }
   );
 
-  server.registerTool(
+  registerTool(
     'reindex',
     {
       description: 'Force a re-scan of the repository. Use full=true to rebuild the index from scratch.',
@@ -281,7 +293,7 @@ export async function createServer(root) {
     }
   );
 
-  server.registerTool(
+  registerTool(
     'save_note',
     {
       description:
@@ -297,7 +309,7 @@ export async function createServer(root) {
     }
   );
 
-  server.registerTool(
+  registerTool(
     'recall_notes',
     {
       description: 'Retrieve previously saved project notes relevant to a query (keyword match, most relevant first).',

@@ -144,7 +144,11 @@ test('MCP stdio round-trip: tools list and calls work end-to-end', async () => {
 
     const statsRes = await client.callTool({ name: 'usage_stats', arguments: {} });
     assert.match(statsRes.content[0].text, /read_symbol: 1 call/);
+    assert.match(statsRes.content[0].text, /find_symbol: 1 call/);
+    assert.match(statsRes.content[0].text, /analyze_impact: 1 call/);
+    assert.match(statsRes.content[0].text, /save_note: 1 call/);
     assert.match(statsRes.content[0].text, /tokens saved/);
+    assert.ok(!statsRes.content[0].text.includes('usage_stats:'), 'usage_stats must not record itself');
   } finally {
     await client.close();
   }
