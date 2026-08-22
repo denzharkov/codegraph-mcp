@@ -160,11 +160,37 @@ test('MCP stdio round-trip: tools list and calls work end-to-end', async () => {
     const recallRes = await client.callTool({ name: 'recall_notes', arguments: { query: 'how does saveUser work' } });
     assert.match(recallRes.content[0].text, /validates before persisting/);
 
+    // every tool must accept its minimal argument set without a protocol
+    // error — the exact failure mode a user hit with argless recall_notes
+    const minimalArgs = {
+      repo_map: {},
+      find_symbol: { name: 'saveUser' },
+      read_symbol: { name: 'saveUser' },
+      file_skeleton: { path: 'src/db.js' },
+      semantic_search: { query: 'save user' },
+      find_callers: { name: 'saveUser' },
+      find_references: { name: 'saveUser' },
+      who_imports: { path: 'src/api.js' },
+      analyze_impact: { name: 'saveUser' },
+      reindex: {},
+      save_note: { text: 'minimal-args sweep note' },
+      recall_notes: {},
+      usage_stats: {},
+      generate_dashboard: {}
+    };
+    for (const t of tools.tools) {
+      assert.ok(t.name in minimalArgs, `no minimal-args case for new tool "${t.name}" — add one`);
+      const r = await client.callTool({ name: t.name, arguments: minimalArgs[t.name] });
+      assert.ok(!r.isError, `${t.name} failed on minimal args: ${r.content?.[0]?.text}`);
+    }
+    const argless = await client.callTool({ name: 'recall_notes', arguments: {} });
+    assert.match(argless.content[0].text, /minimal-args sweep note|validates before persisting/, 'argless recall returns recent notes');
+
     const statsRes = await client.callTool({ name: 'usage_stats', arguments: {} });
-    assert.match(statsRes.content[0].text, /read_symbol: 1 call/);
-    assert.match(statsRes.content[0].text, /find_symbol: 1 call/);
-    assert.match(statsRes.content[0].text, /analyze_impact: 1 call/);
-    assert.match(statsRes.content[0].text, /save_note: 1 call/);
+    assert.match(statsRes.content[0].text, /read_symbol: \d+ call/);
+    assert.match(statsRes.content[0].text, /find_symbol: \d+ call/);
+    assert.match(statsRes.content[0].text, /analyze_impact: \d+ call/);
+    assert.match(statsRes.content[0].text, /save_note: \d+ call/);
     assert.match(statsRes.content[0].text, /tokens saved/);
     assert.ok(!statsRes.content[0].text.includes('usage_stats:'), 'usage_stats must not record itself');
   } finally {

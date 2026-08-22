@@ -32,7 +32,7 @@ export async function createServer(root) {
   // Usage guidance ships with the server via MCP `instructions` — the client
   // (Claude Code) injects it automatically, so users need zero configuration.
   const server = new McpServer(
-    { name: 'codegraph', version: '0.5.1' },
+    { name: 'codegraph', version: '0.5.2' },
     {
       instructions: [
         'This server maintains a pre-built symbol graph of the repository. Prefer its tools over raw file reads and grep:',
@@ -42,7 +42,7 @@ export async function createServer(root) {
         '- Read a single function/class with read_symbol instead of the whole file.',
         '- Use find_references for every mention of an identifier, who_imports to see which files depend on a module.',
         "- Before changing a function's signature or behavior, run analyze_impact.",
-        '- Persist non-obvious decisions with save_note; check recall_notes when starting a task.'
+        '- Persist non-obvious decisions with save_note; call recall_notes (a query is optional) when starting a task.'
       ].join('\n')
     }
   );
@@ -415,9 +415,10 @@ export async function createServer(root) {
   registerTool(
     'recall_notes',
     {
-      description: 'Retrieve previously saved project notes relevant to a query (keyword match, most relevant first).',
+      description:
+        'Retrieve previously saved project notes. With a query — the most relevant first; without arguments — the most recent ones. Safe to call at the start of any task.',
       inputSchema: {
-        query: z.string().describe('What are you working on / looking for'),
+        query: z.string().optional().describe('What are you working on / looking for (omit for the latest notes)'),
         limit: z.number().int().min(1).max(20).optional()
       }
     },
@@ -426,6 +427,8 @@ export async function createServer(root) {
       let found;
       if (notes.notes.length === 0) {
         found = [];
+      } else if (!query || !query.trim()) {
+        found = notes.notes.slice(-limit).reverse();
       } else {
         const { results } = await semanticSearch(vectors, query, noteItems(notes.notes), limit);
         found = results.map((r) => r.item.note);
