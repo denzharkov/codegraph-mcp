@@ -10,8 +10,10 @@
 //   Read of a whole indexed file above the line threshold  -> file_skeleton / read_symbol
 //   cat of such a file                                     -> same
 //   recursive grep for a bare identifier the index defines -> find_symbol / find_references
-// Targeted reads (offset/limit, sed -n ranges, head/tail), regex greps,
-// unknown identifiers and unindexed files always pass through.
+//   grep for "class X" / "def X" of an indexed symbol       -> read_symbol
+//   sed -n a,bp / Read offset+limit that spans one symbol   -> read_symbol
+// Small targeted reads, head/tail, regex greps, unknown identifiers and
+// unindexed files always pass through.
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -23,6 +25,10 @@ const GREP_VALUE_FLAGS = new Set([
   '--include', '--exclude', '--exclude-dir', '--glob', '--type', '--max-count', '--context'
 ]);
 const IDENTIFIER = /^(?:\\b)?([A-Za-z_][A-Za-z0-9_]*)(?:\\b)?$/;
+const DEFINITION = /^(?:class|def|function|func|fn|struct|interface|type|enum)\s+([A-Za-z_][A-Za-z0-9_]*)/;
+const SED_RANGE = /^sed\s+-n\s+'?(\d+),(\d+)p'?\s+(\S+)$/;
+const MIN_SUBSTRING = 5;
+const MIN_SYMBOL_LINES = 15;
 
 export function findRoot(start) {
   let dir = path.resolve(start);
@@ -48,6 +54,45 @@ export function loadIndex(root) {
   } catch {
     return null;
   }
+}
+
+function substringMatches(index, name) {
+  if (name.length < MIN_SUBSTRING) return [];
+  const needle = name.toLowerCase();
+  const out = [];
+  for (const key of index.symbols.keys()) {
+    if (key.toLowerCase().includes(needle)) out.push(key);
+    if (out.length === 3) break;
+  }
+  return out;
+}
+
+// The read is "one symbol read by line numbers" when the range and a
+// top-level symbol cover at least 60% of each other. A small window inside a
+// class, a wide sweep over several symbols, a short helper and the head of
+// the file (imports) are left alone.
+function symbolSpanning(index, rel, from, to) {
+  if (from <= 1) return null;
+  let best = null;
+  for (const s of index.files[rel].symbols || []) {
+    if (s.parent || s.endLine - s.startLine + 1 < MIN_SYMBOL_LINES) continue;
+    const overlap = Math.min(to, s.endLine) - Math.max(from, s.startLine) + 1;
+    if (overlap <= 0) continue;
+    const symLen = s.endLine - s.startLine + 1;
+    const rangeLen = to - from + 1;
+    if (overlap < 0.6 * symLen || overlap < 0.6 * rangeLen) continue;
+    if (!best || symLen < best.endLine - best.startLine + 1) best = s;
+  }
+  return best;
+}
+
+function rangeReason(ctx, rel, from, to) {
+  const s = symbolSpanning(ctx.index, rel, from, to);
+  if (!s) return null;
+  return (
+    `Lines ${from}-${to} of ${rel} are ${s.kind} ${s.name} (${s.startLine}-${s.endLine}). ` +
+    `Call read_symbol("${s.name}", file="${rel}") instead of reading by line numbers.`
+  );
 }
 
 function relPath(root, file, cwd) {
@@ -80,14 +125,47 @@ function wholeFileReason(ctx, rel) {
 }
 
 function checkRead(input, ctx) {
-  if (!input.file_path || input.offset != null || input.limit != null) return null;
+  if (!input.file_path) return null;
   const rel = relPath(ctx.root, input.file_path, ctx.cwd);
   if (!rel || !ctx.index.files[rel]) return null;
-  return wholeFileReason(ctx, rel);
+  if (input.offset == null && input.limit == null) return wholeFileReason(ctx, rel);
+  const from = Number(input.offset) || 1;
+  const to = input.limit != null ? from + Number(input.limit) - 1 : countLines(ctx.root, rel);
+  return rangeReason(ctx, rel, from, to);
 }
 
+function checkSed(segment, ctx) {
+  const m = SED_RANGE.exec(segment.trim());
+  if (!m) return null;
+  const rel = relPath(ctx.root, m[3].replace(/^['"]|['"]$/g, ''), ctx.cwd);
+  if (!rel || !ctx.index.files[rel]) return null;
+  return rangeReason(ctx, rel, Number(m[1]), Number(m[2]));
+}
+
+// Shell-ish split: whitespace separates, quotes group ("class Foo" is one token).
 function tokens(segment) {
-  return segment.trim().split(/\s+/).map((t) => t.replace(/^['"]|['"]$/g, '')).filter(Boolean);
+  const out = [];
+  let cur = '';
+  let quote = null;
+  let started = false;
+  for (const ch of segment.trim()) {
+    if (quote) {
+      if (ch === quote) quote = null;
+      else cur += ch;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      started = true;
+    } else if (/\s/.test(ch)) {
+      if (started) out.push(cur);
+      cur = '';
+      started = false;
+    } else {
+      cur += ch;
+      started = true;
+    }
+  }
+  if (started) out.push(cur);
+  return out;
 }
 
 function checkCat(segment, ctx) {
@@ -124,6 +202,14 @@ function checkGrep(segment, ctx) {
     }
   }
   if (!pattern) return null;
+  const def = DEFINITION.exec(pattern);
+  if (def && ctx.index.symbols.has(def[1])) {
+    const d = ctx.index.symbols.get(def[1]);
+    return (
+      `${def[1]} is a ${d.kind} codegraph knows (${d.file}:${d.line}). ` +
+      `Call read_symbol("${def[1]}") for its full source instead of grep with context lines.`
+    );
+  }
   const m = IDENTIFIER.exec(pattern);
   if (!m) return null;
   if (!recursive) {
@@ -133,12 +219,19 @@ function checkGrep(segment, ctx) {
     });
   }
   if (!recursive) return null;
-  const def = ctx.index.symbols.get(m[1]);
-  if (!def) return null;
+  const exact = ctx.index.symbols.get(m[1]);
+  if (exact) {
+    return (
+      `${m[1]} is a ${exact.kind} codegraph knows (${exact.file}:${exact.line}). ` +
+      `Use find_symbol("${m[1]}") for the definition, find_references("${m[1]}") for every mention ` +
+      `or analyze_impact("${m[1]}") for callers instead of grep.`
+    );
+  }
+  const partial = substringMatches(ctx.index, m[1]);
+  if (partial.length === 0) return null;
   return (
-    `${m[1]} is a ${def.kind} codegraph knows (${def.file}:${def.line}). ` +
-    `Use find_symbol("${m[1]}") for the definition, find_references("${m[1]}") for every mention ` +
-    `or analyze_impact("${m[1]}") for callers instead of grep.`
+    `"${m[1]}" is part of symbol names codegraph knows (${partial.join(', ')}). ` +
+    `Call find_symbol("${m[1]}") (substring match) to get their definitions with line ranges instead of grep.`
   );
 }
 
@@ -146,7 +239,7 @@ function checkBash(input, ctx) {
   const command = input.command || '';
   for (const segment of command.split(/&&|\|\||;|\n/)) {
     if (!segment.includes('|')) {
-      const reason = checkCat(segment, ctx);
+      const reason = checkCat(segment, ctx) || checkSed(segment, ctx);
       if (reason) return reason;
     }
     for (const piece of segment.split('|')) {

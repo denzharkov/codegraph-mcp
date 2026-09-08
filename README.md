@@ -113,13 +113,22 @@ only when the graph can answer better, telling the agent which tool to use:
 |---|---|
 | `Read` of a whole indexed file above 300 lines | deny → `file_skeleton`, then `read_symbol` |
 | `cat` of such a file (not piped) | same |
+| `sed -n a,bp` / `Read` offset+limit whose range is one top-level symbol | deny → `read_symbol(name, file)` |
+| `grep "class X"` / `"def x"` of an indexed symbol (typically with `-A`) | deny → `read_symbol` |
 | recursive `grep`/`rg` for a bare identifier the index defines | deny → `find_symbol` / `find_references` / `analyze_impact` |
-| `Read` with offset/limit, `sed -n`, `head`, `tail`, `cat … \|` | pass |
-| grep for a regex, a string, or a name the index does not know | pass |
+| recursive grep for a fragment (5+ chars) of known symbol names | deny → `find_symbol` (substring) |
+| small window inside a class, wide sweep, head of file, `head`, `tail`, `cat … \|` | pass |
+| grep for a regex, a string, a name the index does not know, or on one file | pass |
 | anything outside a repo with `.codegraph/index.json` | pass |
 
 `CODEGRAPH_MIN_LINES` changes the threshold. `uninstall` removes the hook
 together with the MCP registration.
+
+The range and definition rules exist because the first version let the
+agent's real habit through untouched: grep for `class X` with `-A 25`, then
+`sed -n 256,300p` on the line numbers it found — a symbol read by hand, in
+two calls, with no hit on the graph. Every allowed pattern is in the evals
+so the hook stays quiet where grep is genuinely the right tool.
 
 The decisions are pinned by [evals/hook-evals.json](evals/hook-evals.json):
 real-looking `Read` / `Bash` calls with the expected verdict, run against
