@@ -1,0 +1,43 @@
+[
+  { "name": "Read whole large indexed file", "tool": "Read", "input": { "file_path": "app/models.py" }, "expect": "deny", "mentions": "file_skeleton(\"app/models.py\")" },
+  { "name": "Read with offset/limit", "tool": "Read", "input": { "file_path": "app/models.py", "offset": 40, "limit": 60 }, "expect": "pass" },
+  { "name": "Read with limit only", "tool": "Read", "input": { "file_path": "app/models.py", "limit": 50 }, "expect": "pass" },
+  { "name": "Read small indexed file", "tool": "Read", "input": { "file_path": "app/small.py" }, "expect": "pass" },
+  { "name": "Read large non-code file", "tool": "Read", "input": { "file_path": "README.md" }, "expect": "pass" },
+  { "name": "Read file outside the repo", "tool": "Read", "input": { "file_path": "/etc/hosts" }, "expect": "pass" },
+  { "name": "Read missing file", "tool": "Read", "input": { "file_path": "app/nope.py" }, "expect": "pass" },
+
+  { "name": "cat large file", "tool": "Bash", "input": { "command": "cat app/models.py" }, "expect": "deny", "mentions": "read_symbol" },
+  { "name": "cat large file, relative ./", "tool": "Bash", "input": { "command": "cat ./app/models.py" }, "expect": "deny" },
+  { "name": "cat inside && chain", "tool": "Bash", "input": { "command": "git status && cat app/models.py; echo done" }, "expect": "deny" },
+  { "name": "cat piped into wc", "tool": "Bash", "input": { "command": "cat app/models.py | wc -l" }, "expect": "pass" },
+  { "name": "cat small file", "tool": "Bash", "input": { "command": "cat app/small.py" }, "expect": "pass" },
+  { "name": "cat two small files", "tool": "Bash", "input": { "command": "cat app/small.py src/db.js" }, "expect": "pass" },
+  { "name": "sed range", "tool": "Bash", "input": { "command": "sed -n 120,160p app/models.py" }, "expect": "pass" },
+  { "name": "head", "tool": "Bash", "input": { "command": "head -50 app/models.py" }, "expect": "pass" },
+  { "name": "tail", "tool": "Bash", "input": { "command": "tail -n 30 app/models.py" }, "expect": "pass" },
+  { "name": "wc", "tool": "Bash", "input": { "command": "wc -l app/models.py" }, "expect": "pass" },
+
+  { "name": "grep -rn known class", "tool": "Bash", "input": { "command": "grep -rn Customer app" }, "expect": "deny", "mentions": "find_symbol(\"Customer\")" },
+  { "name": "grep -rn known function, quoted", "tool": "Bash", "input": { "command": "grep -rn \"build_grid\" app" }, "expect": "deny" },
+  { "name": "grep with \\b anchors", "tool": "Bash", "input": { "command": "grep -rn '\\bsaveUser\\b' src" }, "expect": "deny" },
+  { "name": "grep -e form with --include", "tool": "Bash", "input": { "command": "grep -rn --include='*.py' -e Order ." }, "expect": "deny" },
+  { "name": "grep -A/-B context flags", "tool": "Bash", "input": { "command": "grep -rn -A 3 -B 2 Invoice app" }, "expect": "deny" },
+  { "name": "grep piped to head", "tool": "Bash", "input": { "command": "grep -rn Shipment app | head -20" }, "expect": "deny" },
+  { "name": "rg known symbol", "tool": "Bash", "input": { "command": "rg createUserHandler src" }, "expect": "deny", "mentions": "find_references(\"createUserHandler\")" },
+  { "name": "rg with -t type flag", "tool": "Bash", "input": { "command": "rg -t py Refund" }, "expect": "deny" },
+  { "name": "grep directory target implies recursion", "tool": "Bash", "input": { "command": "grep -n Coupon app" }, "expect": "deny" },
+  { "name": "grep -R uppercase", "tool": "Bash", "input": { "command": "grep -Rn Payment ." }, "expect": "deny" },
+
+  { "name": "grep single file", "tool": "Bash", "input": { "command": "grep -n Customer app/models.py" }, "expect": "pass" },
+  { "name": "grep multi-word pattern", "tool": "Bash", "input": { "command": "grep -rn \"class Customer\" app" }, "expect": "pass" },
+  { "name": "grep regex", "tool": "Bash", "input": { "command": "grep -rn 'def (total|validate)' app" }, "expect": "pass" },
+  { "name": "grep unknown identifier", "tool": "Bash", "input": { "command": "grep -rn not_defined_anywhere app" }, "expect": "pass" },
+  { "name": "grep TODO marker", "tool": "Bash", "input": { "command": "grep -rn TODO ." }, "expect": "pass" },
+  { "name": "grep module constant (not a symbol)", "tool": "Bash", "input": { "command": "grep -rn STATUS_PAID app" }, "expect": "pass" },
+  { "name": "grep on command output", "tool": "Bash", "input": { "command": "docker compose ps | grep web" }, "expect": "pass" },
+  { "name": "git grep is not touched", "tool": "Bash", "input": { "command": "git grep Customer" }, "expect": "pass" },
+  { "name": "unrelated command", "tool": "Bash", "input": { "command": "npm test" }, "expect": "pass" },
+
+  { "name": "other tools pass", "tool": "Edit", "input": { "file_path": "app/models.py" }, "expect": "pass" }
+]

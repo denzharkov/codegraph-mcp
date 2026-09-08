@@ -121,6 +121,34 @@ only when the graph can answer better, telling the agent which tool to use:
 `CODEGRAPH_MIN_LINES` changes the threshold. `uninstall` removes the hook
 together with the MCP registration.
 
+The decisions are pinned by [evals/hook-evals.json](evals/hook-evals.json):
+real-looking `Read` / `Bash` calls with the expected verdict, run against
+[evals/fixture](evals/fixture) by `node evals/run.js` (and by `npm test`).
+When the hook blocks or passes something it should not, add the case there.
+
+## Benchmark
+
+`codegraph-mcp bench` measures, on the real index of a repo, what the agent
+pays for a whole-file read against what codegraph hands it instead — the
+`file_skeleton` text, then the source of one symbol. Same chars/4 estimate as
+`usage_stats`, so live counters and benchmark are comparable. On a 350-file
+Django backend:
+
+```
+All indexed files with symbols: 353 files
+  whole file               486,699 tokens
+  file_skeleton             88,264 tokens  (-82%)
+  skeleton + one symbol    159,126 tokens  (-67%)
+
+Files above the hook threshold (> 300 lines): 42 files
+  whole file               285,368 tokens
+  file_skeleton             41,540 tokens  (-85%)
+  skeleton + one symbol     48,458 tokens  (-83%)
+```
+
+Per-file rows for the largest files follow; the full result lands in
+`.codegraph/benchmark.json` (`--no-write` to skip).
+
 ## Transparent proxy (guaranteed savings)
 
 The MCP tools above save tokens only when the agent chooses to use them. The
@@ -173,6 +201,7 @@ on proxy start.
 ```bash
 node bin/codegraph-mcp.js index                # index cwd, print stats
 node bin/codegraph-mcp.js index --root ~/proj  # index another directory
+node bin/codegraph-mcp.js bench                # whole file vs file_skeleton / read_symbol, in tokens
 node bin/codegraph-mcp.js dashboard            # HTML report, opens in browser
 node bin/codegraph-mcp.js map                  # interactive architecture map
 node bin/codegraph-mcp.js                      # start stdio MCP server (cwd)

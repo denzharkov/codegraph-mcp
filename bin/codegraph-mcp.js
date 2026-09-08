@@ -4,6 +4,7 @@
 //   codegraph-mcp index [--root <path>] build/refresh the index and print stats
 //   codegraph-mcp install               register in Claude Code (user scope) + PreToolUse hook
 //   codegraph-mcp uninstall             remove the registration and the hook
+//   codegraph-mcp bench [--root <path>] [--no-write]     tokens: whole file vs file_skeleton / read_symbol
 //   codegraph-mcp dashboard [--root <path>] [--no-open]  generate HTML report
 //   codegraph-mcp map [--root <path>] [--no-open]        interactive architecture map
 //   codegraph-mcp proxy [--port <n>]    transparent dedup proxy to the Anthropic API
@@ -55,6 +56,15 @@ if (command === 'index') {
   });
   server.close();
   process.exit(r.status ?? 0);
+} else if (command === 'bench') {
+  const { runBench, formatBench } = await import('../src/bench.js');
+  const result = await runBench(root, { minLines: Number(process.env.CODEGRAPH_MIN_LINES) || 300 });
+  console.log(formatBench(result));
+  if (!args.includes('--no-write')) {
+    const file = path.join(root, '.codegraph', 'benchmark.json');
+    (await import('node:fs')).writeFileSync(file, JSON.stringify(result, null, 1));
+    console.log(`\nWritten to ${file}`);
+  }
 } else if (command === 'dashboard' || command === 'map') {
   const file =
     command === 'dashboard'
@@ -97,6 +107,6 @@ if (command === 'index') {
   const { startStdio } = await import('../src/server.js');
   await startStdio(root);
 } else {
-  console.error(`Unknown command: ${command}\nUsage: codegraph-mcp [serve|index|install|uninstall] [--root <path>]`);
+  console.error(`Unknown command: ${command}\nUsage: codegraph-mcp [serve|index|bench|install|uninstall] [--root <path>]`);
   process.exit(1);
 }

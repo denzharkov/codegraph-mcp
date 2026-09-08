@@ -10,6 +10,20 @@ import { Stats } from './stats.js';
 import { VectorStore, symbolItems, noteItems, semanticSearch } from './semantic.js';
 import { buildReverseImports } from './imports.js';
 
+// The exact text file_skeleton returns; bench measures this against the file.
+export function formatSkeleton(key, rec) {
+  const lines = [`${key} (${rec.lang}, ${rec.symbols.length} symbols)`];
+  if (rec.doc) lines.push(rec.doc);
+  if (rec.imports.length > 0) lines.push(`imports: ${rec.imports.slice(0, 30).join(', ')}`);
+  lines.push('');
+  for (const s of rec.symbols) {
+    const indent = s.parent ? '  ' : '';
+    lines.push(`${indent}${s.startLine}-${s.endLine} ${s.signature}${s.exported ? '  [exported]' : ''}`);
+    if (s.doc) lines.push(`${indent}     ${s.doc}`);
+  }
+  return lines.join('\n');
+}
+
 function text(s, counterfactualChars = null) {
   const res = { content: [{ type: 'text', text: s }] };
   if (counterfactualChars !== null) res.counterfactualChars = counterfactualChars;
@@ -33,7 +47,7 @@ export async function createServer(root) {
   // Usage guidance ships with the server via MCP `instructions` — the client
   // (Claude Code) injects it automatically, so users need zero configuration.
   const server = new McpServer(
-    { name: 'codegraph', version: '0.14.0' },
+    { name: 'codegraph', version: '0.15.0' },
     {
       instructions: [
         'This server maintains a pre-built symbol graph of the repository. Prefer its tools over raw file reads and grep:',
@@ -220,17 +234,7 @@ export async function createServer(root) {
         }
       }
       if (!rec) return text(`File "${relPath}" is not in the index (unsupported language, ignored, or does not exist).`);
-      const lines = [`${key} (${rec.lang}, ${rec.symbols.length} symbols)`];
-      if (rec.doc) lines.push(rec.doc);
-      if (rec.imports.length > 0) lines.push(`imports: ${rec.imports.slice(0, 30).join(', ')}`);
-      lines.push('');
-      for (const s of rec.symbols) {
-        const indent = s.parent ? '  ' : '';
-        lines.push(`${indent}${s.startLine}-${s.endLine} ${s.signature}${s.exported ? '  [exported]' : ''}`);
-        if (s.doc) lines.push(`${indent}     ${s.doc}`);
-      }
-      const out = lines.join('\n');
-      return text(out, rec.size);
+      return text(formatSkeleton(key, rec), rec.size);
     }
   );
 

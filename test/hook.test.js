@@ -117,3 +117,24 @@ test('install/uninstall edit settings.json without touching other hooks', async 
   uninstallHook(fresh);
   assert.deepEqual(JSON.parse(fs.readFileSync(fresh, 'utf8')), {});
 });
+
+test('evals/hook-evals.json all pass against the fixture', async () => {
+  const { runEvals } = await import('../evals/run.js');
+  const results = await runEvals();
+  const failed = results.filter((r) => !r.ok);
+  assert.deepEqual(failed, [], failed.map((r) => `${r.name}: expected ${r.expect}, got ${r.got}`).join('\n'));
+  assert.ok(results.length >= 30);
+});
+
+test('bench: skeleton and symbol are cheaper than the whole file', async () => {
+  const { runBench, formatBench } = await import('../src/bench.js');
+  const { fixtureRoot } = await import('../evals/run.js');
+  const result = await runBench(fixtureRoot, { minLines: 300 });
+  const models = result.top.find((r) => r.file === 'app/models.py');
+  assert.ok(models, 'fixture file must be measured');
+  assert.ok(models.skeletonTokens < models.fileTokens / 2, `${models.skeletonTokens} vs ${models.fileTokens}`);
+  assert.ok(models.medianSymbolTokens < models.fileTokens / 4);
+  assert.equal(result.aboveThreshold.files, 1);
+  assert.ok(result.aboveThreshold.skeletonSavedPct > 50);
+  assert.ok(formatBench(result).includes('app/models.py'));
+});
