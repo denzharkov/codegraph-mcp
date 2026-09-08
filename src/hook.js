@@ -225,3 +225,24 @@ export function uninstallHook(settingsFile) {
   if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
   writeSettings(settingsFile, settings);
 }
+
+// ANTHROPIC_BASE_URL is set only when it is free, and removed only when it
+// is ours: a user's own gateway is never clobbered.
+export function installProxyEnv(settingsFile, url) {
+  const settings = readSettings(settingsFile);
+  settings.env ??= {};
+  const current = settings.env.ANTHROPIC_BASE_URL;
+  if (current && !/^http:\/\/127\.0\.0\.1:\d+$/.test(current)) return current;
+  settings.env.ANTHROPIC_BASE_URL = url;
+  writeSettings(settingsFile, settings);
+  return null;
+}
+
+export function uninstallProxyEnv(settingsFile) {
+  const settings = readSettings(settingsFile);
+  const current = settings.env?.ANTHROPIC_BASE_URL;
+  if (!current || !/^http:\/\/127\.0\.0\.1:\d+$/.test(current)) return;
+  delete settings.env.ANTHROPIC_BASE_URL;
+  if (Object.keys(settings.env).length === 0) delete settings.env;
+  writeSettings(settingsFile, settings);
+}

@@ -154,7 +154,10 @@ Per-file rows for the largest files follow; the full result lands in
 The MCP tools above save tokens only when the agent chooses to use them. The
 proxy layer works the other way — like ContextForge, it sits between Claude
 Code and the Anthropic API and compresses traffic **regardless of agent
-behavior**:
+behavior**. Nothing in a conversation is ever "unloaded" by Claude Code
+itself: a file read, a test log, a command output stays in the history and
+is re-sent with every request. The proxy is the one place that can shrink
+it:
 
 - **History deduplication**: when the conversation contains identical
   tool results (the same file read twice, repeated command output), every
@@ -166,10 +169,16 @@ behavior**:
 - **Stale-read skeletonization**: when a file was read, edited, and read
   again, the older full copy in history is replaced by its tree-sitter
   signature skeleton (imports + declarations with line ranges); the newest
-  read always stays verbatim. Non-code files fall back to head+tail
+  read always stays verbatim. A read is a `Read` tool call **or** a Bash
+  `cat file` / `sed -n a,bp file` — in practice most reads are Bash, and
+  measured over a month they were three quarters of all tool output. A stale
+  partial read becomes a one-line stub; non-code files fall back to head+tail
   truncation. Transforms are pure functions of the content, so repeated
   requests produce identical bytes and the prompt cache re-stabilizes after
   a single rewrite.
+- **Stale-output truncation**: when the same Bash command ran several times
+  (test reruns, tailing a task log), every output except the latest keeps
+  only its first 15 and last 10 lines.
 - **Prompt grounding**: your message is transformed *before* it reaches the
   model — the safe way. The words are never rewritten; instead the proxy
   appends a clearly-labeled block of verifiable facts about the identifiers
@@ -181,20 +190,24 @@ behavior**:
 - Auth headers pass through untouched (API key or OAuth). Anything the proxy
   cannot parse is forwarded verbatim. Streaming (SSE) is piped through.
 
+**It is on by default after `install`.** The install command sets
+`ANTHROPIC_BASE_URL=http://127.0.0.1:3210` in `~/.claude/settings.json` (CLI
+and VS Code extension alike; an existing foreign value is left alone), and
+the MCP server keeps the proxy alive: on start and every 30 s it checks the
+port and spawns a detached proxy when nothing answers. Whenever Claude Code
+runs, its MCP server runs, so the proxy does too. The proxy exits after a day
+idle. `CODEGRAPH_NO_PROXY=1` disables the supervisor, `CODEGRAPH_PROXY_PORT`
+moves the port, `uninstall` removes the env entry.
+
+Manual alternatives:
+
 ```bash
-codegraph-mcp wrap                 # like 'cf wrap claude': proxy + claude in one command
-codegraph-mcp proxy --port 3210    # or run the proxy standalone
+codegraph-mcp wrap                          # like 'cf wrap claude': proxy + claude in one command
+codegraph-mcp proxy --port 3210 --idle 3600 # run the proxy standalone (--idle: exit after N idle seconds)
 ```
 
-For the VS Code extension, run the proxy and point the extension at it via
-project or global settings:
-
-```json
-{ "env": { "ANTHROPIC_BASE_URL": "http://127.0.0.1:3210" } }
-```
-
-Cumulative savings are tracked in `~/.codegraph/proxy-stats.json` and printed
-on proxy start.
+Cumulative savings are tracked in `~/.codegraph/proxy-stats.json`, printed
+on proxy start and served at `GET /codegraph-proxy/health`.
 
 ## CLI usage
 

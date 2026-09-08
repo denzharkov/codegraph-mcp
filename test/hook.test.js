@@ -138,3 +138,21 @@ test('bench: skeleton and symbol are cheaper than the whole file', async () => {
   assert.ok(result.aboveThreshold.skeletonSavedPct > 50);
   assert.ok(formatBench(result).includes('app/models.py'));
 });
+
+test('proxy env: set when free, kept when foreign, removed only when ours', async () => {
+  const { installProxyEnv, uninstallProxyEnv } = await import('../src/hook.js');
+  const file = path.join(root, 'env-settings.json');
+  fs.writeFileSync(file, JSON.stringify({ env: { FOO: '1' } }));
+  assert.equal(installProxyEnv(file, 'http://127.0.0.1:3210'), null);
+  let s = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(s.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:3210');
+  assert.equal(s.env.FOO, '1');
+  uninstallProxyEnv(file);
+  s = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(s.env, { FOO: '1' });
+
+  fs.writeFileSync(file, JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://gateway.corp' } }));
+  assert.equal(installProxyEnv(file, 'http://127.0.0.1:3210'), 'https://gateway.corp');
+  uninstallProxyEnv(file);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).env.ANTHROPIC_BASE_URL, 'https://gateway.corp');
+});

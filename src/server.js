@@ -1,6 +1,7 @@
 // MCP server exposing the repo graph to Claude Code (CLI and VS Code).
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -47,7 +48,7 @@ export async function createServer(root) {
   // Usage guidance ships with the server via MCP `instructions` — the client
   // (Claude Code) injects it automatically, so users need zero configuration.
   const server = new McpServer(
-    { name: 'codegraph', version: '0.15.0' },
+    { name: 'codegraph', version: '0.16.0' },
     {
       instructions: [
         'This server maintains a pre-built symbol graph of the repository. Prefer its tools over raw file reads and grep:',
@@ -455,4 +456,12 @@ export async function startStdio(root) {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error(`[codegraph] serving ${root}`);
+  if (!process.env.CODEGRAPH_NO_PROXY) {
+    const { ensureProxy, DEFAULT_PROXY_PORT } = await import('./proxy.js');
+    ensureProxy({
+      root,
+      port: Number(process.env.CODEGRAPH_PROXY_PORT) || DEFAULT_PROXY_PORT,
+      entry: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'codegraph-mcp.js')
+    });
+  }
 }

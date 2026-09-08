@@ -104,7 +104,8 @@ test('MCP stdio round-trip: tools list and calls work end-to-end', async () => {
 
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [path.join(projectRoot, 'bin', 'codegraph-mcp.js'), '--root', fixtureDir]
+    args: [path.join(projectRoot, 'bin', 'codegraph-mcp.js'), '--root', fixtureDir],
+    env: { ...process.env, CODEGRAPH_NO_PROXY: '1' }
   });
   const client = new Client({ name: 'smoke', version: '0.0.1' });
   await client.connect(transport);

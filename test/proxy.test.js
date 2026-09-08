@@ -213,3 +213,82 @@ test('grounding: the newest human message gains repo facts; history stays byte-s
     fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
+
+function bashPair(id, command, text) {
+  return [
+    { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text }] }] }
+  ];
+}
+
+test('Bash cat / sed -n count as reads: stale cat becomes a skeleton, stale sed a stub', async () => {
+  const { skeletonizeStaleReads, bashRead } = await import('../src/transforms.js');
+  assert.deepEqual(bashRead('cat app/models.py'), { file: 'app/models.py', partial: null });
+  assert.deepEqual(bashRead("sed -n '10,40p' app/models.py"), { file: 'app/models.py', partial: '10-40' });
+  assert.equal(bashRead('cat app/models.py | wc -l'), null);
+  assert.equal(bashRead('grep -rn foo app'), null);
+
+  const fnBody = '    value = compute(x)\n    return value * 2\n';
+  const v1 = `import os\n\n\ndef process(items):\n${fnBody.repeat(30)}\n\ndef helper(x):\n${fnBody.repeat(30)}`;
+  const v2 = v1.replace('helper(x)', 'helper(x, y)');
+  const chunk = fnBody.repeat(40);
+  const body = {
+    messages: [
+      ...bashPair('b1', 'cat app/models.py', v1),
+      ...bashPair('b2', "sed -n '10,40p' app/models.py", chunk),
+      { role: 'assistant', content: [{ type: 'text', text: 'editing...' }] },
+      ...bashPair('b3', 'cat app/models.py', v2)
+    ]
+  };
+  const { body: out, count } = await skeletonizeStaleReads(body);
+  assert.equal(count, 2);
+  const staleCat = out.messages[1].content[0].content[0].text;
+  assert.match(staleCat, /stale read of app\/models\.py/);
+  assert.match(staleCat, /def process/);
+  assert.ok(staleCat.length < v1.length / 3);
+  const staleSed = out.messages[3].content[0].content[0].text;
+  assert.match(staleSed, /stale partial read of app\/models\.py \(10-40\)/);
+  assert.equal(out.messages[6].content[0].content[0].text, v2, 'newest read verbatim');
+});
+
+test('earlier runs of the same Bash command keep head and tail only', async () => {
+  const { truncateStaleOutputs } = await import('../src/transforms.js');
+  const log = (marker) => Array.from({ length: 200 }, (_, i) => `test line ${i} ${marker}`).join('\n');
+  const body = {
+    messages: [
+      ...bashPair('t1', 'docker-compose run --rm web python manage.py test esum', log('run1')),
+      ...bashPair('t2', 'sleep 60; tail -40 /tmp/tasks/abc.output', log('poll1')),
+      ...bashPair('t3', 'tail -30 /tmp/tasks/abc.output', log('poll2')),
+      ...bashPair('t4', 'docker-compose run --rm web python manage.py test esum', log('run2')),
+      ...bashPair('t5', 'ls -la', log('once'))
+    ]
+  };
+  const { body: out, savedChars, count } = truncateStaleOutputs(body);
+  assert.equal(count, 2, 'first test run and first poll are cut');
+  assert.ok(savedChars > 5000, `saved ${savedChars}`);
+  const cut = out.messages[1].content[0].content[0].text;
+  assert.match(cut, /earlier run of `docker-compose run/);
+  assert.match(cut, /test line 0 run1/);
+  assert.match(cut, /test line 199 run1/);
+  assert.ok(!cut.includes('test line 100 run1'));
+  assert.match(out.messages[3].content[0].content[0].text, /earlier run of `tail/);
+  assert.equal(out.messages[5].content[0].content[0].text, log('poll2'), 'latest poll verbatim');
+  assert.equal(out.messages[7].content[0].content[0].text, log('run2'), 'latest run verbatim');
+  assert.equal(out.messages[9].content[0].content[0].text, log('once'), 'single run untouched');
+  assert.equal(body.messages[1].content[0].content[0].text, log('run1'), 'input not mutated');
+});
+
+test('proxy health route answers locally and idle timeout closes the server', async () => {
+  const { startProxy, proxyAlive, HEALTH_PATH } = await import('../src/proxy.js');
+  const port = 3300 + Math.floor(Math.random() * 500);
+  assert.equal(await proxyAlive(port), false);
+  const server = await startProxy({ port, upstream: 'http://127.0.0.1:1', quiet: true, idleMs: 60_000 });
+  try {
+    assert.equal(await proxyAlive(port), true);
+    const res = await fetch(`http://127.0.0.1:${port}${HEALTH_PATH}`);
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).ok, true);
+  } finally {
+    server.close();
+  }
+});

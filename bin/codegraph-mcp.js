@@ -7,7 +7,7 @@
 //   codegraph-mcp bench [--root <path>] [--no-write]     tokens: whole file vs file_skeleton / read_symbol
 //   codegraph-mcp dashboard [--root <path>] [--no-open]  generate HTML report
 //   codegraph-mcp map [--root <path>] [--no-open]        interactive architecture map
-//   codegraph-mcp proxy [--port <n>]    transparent dedup proxy to the Anthropic API
+//   codegraph-mcp proxy [--port <n>] [--idle <s>]  transparent shrinking proxy to the Anthropic API
 //   codegraph-mcp wrap [args...]        launch claude through the proxy (like cf wrap)
 import os from 'node:os';
 import path from 'node:path';
@@ -39,7 +39,8 @@ if (command === 'index') {
   const { startProxy } = await import('../src/proxy.js');
   const port = Number(argValue(args, '--port')) || 3210;
   const upstream = argValue(args, '--upstream') || process.env.CODEGRAPH_UPSTREAM || 'https://api.anthropic.com';
-  await startProxy({ port, upstream, root });
+  const idleMs = (Number(argValue(args, '--idle')) || 0) * 1000;
+  await startProxy({ port, upstream, root, idleMs });
   console.error(`\nPoint Claude Code at it:\n  CLI:     ANTHROPIC_BASE_URL=http://127.0.0.1:${port} claude`);
   console.error(`  VS Code: add to .claude/settings.json -> {"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:${port}"}}`);
 } else if (command === 'wrap') {
@@ -78,12 +79,20 @@ if (command === 'index') {
 } else if (command === 'install' || command === 'uninstall') {
   // The PreToolUse hook lives in user settings next to the MCP registration:
   // it is what turns the usage guidance from advice into a gate.
-  const { installHook, uninstallHook } = await import('../src/hook.js');
+  const { installHook, uninstallHook, installProxyEnv, uninstallProxyEnv } = await import('../src/hook.js');
+  const { DEFAULT_PROXY_PORT } = await import('../src/proxy.js');
   const settingsFile = path.join(os.homedir(), '.claude', 'settings.json');
   const hookScript = path.join(path.dirname(fileURLToPath(import.meta.url)), 'codegraph-hook.js');
+  const proxyUrl = `http://127.0.0.1:${Number(process.env.CODEGRAPH_PROXY_PORT) || DEFAULT_PROXY_PORT}`;
   const quote = (s) => (/[\s"]/.test(s) ? `"${s.replace(/"/g, '\\"')}"` : s);
-  if (command === 'install') installHook(settingsFile, `${quote(process.execPath)} ${quote(hookScript)}`);
-  else uninstallHook(settingsFile);
+  if (command === 'install') {
+    installHook(settingsFile, `${quote(process.execPath)} ${quote(hookScript)}`);
+    const kept = installProxyEnv(settingsFile, proxyUrl);
+    if (kept) console.error(`ANTHROPIC_BASE_URL is already ${kept} in ${settingsFile}; left as is, the proxy is not wired in.`);
+  } else {
+    uninstallHook(settingsFile);
+    uninstallProxyEnv(settingsFile);
+  }
   const claudeArgs =
     command === 'install'
       ? ['mcp', 'add', 'codegraph', '-s', 'user', '--', process.execPath, fileURLToPath(import.meta.url)]
@@ -101,6 +110,8 @@ if (command === 'index') {
   if (command === 'install') {
     console.log('\ncodegraph registered for all your projects (CLI and VS Code extension).');
     console.log(`PreToolUse hook added to ${settingsFile} (Read/Bash on indexed files are routed to codegraph tools).`);
+    console.log(`ANTHROPIC_BASE_URL=${proxyUrl} set there too: every session goes through the shrinking proxy,`);
+    console.log('which the MCP server starts on demand (CODEGRAPH_NO_PROXY=1 to opt out).');
     console.log('Restart your Claude Code session, then verify with: claude mcp list');
   }
 } else if (command === null || command === 'serve') {

@@ -111,14 +111,76 @@ export async function transformRequestBody(parsed, ctx = {}) {
     grounded = g.body;
     addedChars = g.addedChars;
   }
-  const { skeletonizeStaleReads } = await import('./transforms.js');
+  const { skeletonizeStaleReads, truncateStaleOutputs } = await import('./transforms.js');
   const skel = await skeletonizeStaleReads(grounded);
-  const ded = dedupeHistory(skel.body);
-  return { body: ded.body, savedChars: skel.savedChars + ded.savedChars, addedChars };
+  const cut = truncateStaleOutputs(skel.body);
+  const ded = dedupeHistory(cut.body);
+  return { body: ded.body, savedChars: skel.savedChars + cut.savedChars + ded.savedChars, addedChars };
 }
 
-export function startProxy({ port = 3210, upstream = 'https://api.anthropic.com', quiet = false, root = null } = {}) {
+export const DEFAULT_PROXY_PORT = 3210;
+export const HEALTH_PATH = '/codegraph-proxy/health';
+
+/** True when a codegraph proxy answers on the port. */
+export function proxyAlive(port = DEFAULT_PROXY_PORT) {
+  return new Promise((resolve) => {
+    const req = http.get({ host: '127.0.0.1', port, path: HEALTH_PATH, timeout: 500 }, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
+/**
+ * Keeps one detached proxy running for the machine: every MCP server checks
+ * the port on start and every 30 s, and spawns the proxy when nothing
+ * answers. The proxy exits on its own after a day idle. This is what makes
+ * ANTHROPIC_BASE_URL in settings safe to set: whenever Claude Code runs,
+ * its MCP server is running too, and so is the proxy.
+ */
+export function ensureProxy({ root, port = DEFAULT_PROXY_PORT, entry }) {
+  let spawning = false;
+  const check = async () => {
+    if (spawning || (await proxyAlive(port))) return;
+    spawning = true;
+    try {
+      const { spawn } = await import('node:child_process');
+      const child = spawn(
+        process.execPath,
+        [entry, 'proxy', '--port', String(port), '--idle', '86400', ...(root ? ['--root', root] : [])],
+        { detached: true, stdio: 'ignore' }
+      );
+      child.unref();
+      console.error(`[codegraph] proxy spawned on http://127.0.0.1:${port}`);
+    } catch (e) {
+      console.error(`[codegraph] could not spawn proxy: ${e.message}`);
+    } finally {
+      setTimeout(() => (spawning = false), 5000).unref();
+    }
+  };
+  check();
+  setInterval(check, 30_000).unref();
+}
+
+export function startProxy({
+  port = DEFAULT_PROXY_PORT,
+  upstream = 'https://api.anthropic.com',
+  quiet = false,
+  root = null,
+  idleMs = 0
+} = {}) {
   const stats = new ProxyStats();
+  let idleTimer = null;
+  const touch = () => {
+    if (!idleMs) return;
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => server.close(() => process.exit(0)), idleMs).unref();
+  };
 
   // Grounding needs the symbol graph. It loads lazily on the first request
   // and refreshes with the built-in throttle; any failure (no code, no
@@ -146,6 +208,12 @@ export function startProxy({ port = 3210, upstream = 'https://api.anthropic.com'
   };
 
   const server = http.createServer(async (req, res) => {
+    touch();
+    if (req.url === HEALTH_PATH) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, ...stats.data }));
+      return;
+    }
     try {
       const chunks = [];
       for await (const c of req) chunks.push(c);
@@ -208,6 +276,7 @@ export function startProxy({ port = 3210, upstream = 'https://api.anthropic.com'
 
   return new Promise((resolve) => {
     server.listen(port, '127.0.0.1', () => {
+      touch();
       if (!quiet) {
         console.error(`[codegraph-proxy] listening on http://127.0.0.1:${port} -> ${upstream}`);
         console.error(`[codegraph-proxy] ${stats.summary()}`);
