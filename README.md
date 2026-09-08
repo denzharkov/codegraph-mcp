@@ -100,6 +100,27 @@ instead of grep, `file_skeleton` before reading a file, …") through the MCP
 `instructions` field, which Claude Code injects into the agent's context
 automatically on connect. Install, register, done.
 
+## PreToolUse hook (the guidance, enforced)
+
+Instructions are advice, and the agent's habit is `grep -rn` + `cat`. Measured
+over four weeks on a Django repo, codegraph got 8 calls against ~2200 Bash
+reads and greps of indexed source. So `install` also registers a
+`PreToolUse` hook on `Read` and `Bash` in `~/.claude/settings.json`. It works
+from `.codegraph/index.json` alone (no server round-trip) and denies a call
+only when the graph can answer better, telling the agent which tool to use:
+
+| Call | Verdict |
+|---|---|
+| `Read` of a whole indexed file above 300 lines | deny → `file_skeleton`, then `read_symbol` |
+| `cat` of such a file (not piped) | same |
+| recursive `grep`/`rg` for a bare identifier the index defines | deny → `find_symbol` / `find_references` / `analyze_impact` |
+| `Read` with offset/limit, `sed -n`, `head`, `tail`, `cat … \|` | pass |
+| grep for a regex, a string, or a name the index does not know | pass |
+| anything outside a repo with `.codegraph/index.json` | pass |
+
+`CODEGRAPH_MIN_LINES` changes the threshold. `uninstall` removes the hook
+together with the MCP registration.
+
 ## Transparent proxy (guaranteed savings)
 
 The MCP tools above save tokens only when the agent chooses to use them. The

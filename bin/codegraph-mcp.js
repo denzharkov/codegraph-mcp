@@ -2,12 +2,13 @@
 // Entry point. Default: stdio MCP server for the current directory.
 //   codegraph-mcp [--root <path>]       start MCP server
 //   codegraph-mcp index [--root <path>] build/refresh the index and print stats
-//   codegraph-mcp install               register in Claude Code (user scope)
-//   codegraph-mcp uninstall             remove the registration
+//   codegraph-mcp install               register in Claude Code (user scope) + PreToolUse hook
+//   codegraph-mcp uninstall             remove the registration and the hook
 //   codegraph-mcp dashboard [--root <path>] [--no-open]  generate HTML report
 //   codegraph-mcp map [--root <path>] [--no-open]        interactive architecture map
 //   codegraph-mcp proxy [--port <n>]    transparent dedup proxy to the Anthropic API
 //   codegraph-mcp wrap [args...]        launch claude through the proxy (like cf wrap)
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
@@ -65,13 +66,20 @@ if (command === 'index') {
     spawnSync(opener[0], opener[1], { stdio: 'ignore' });
   }
 } else if (command === 'install' || command === 'uninstall') {
+  // The PreToolUse hook lives in user settings next to the MCP registration:
+  // it is what turns the usage guidance from advice into a gate.
+  const { installHook, uninstallHook } = await import('../src/hook.js');
+  const settingsFile = path.join(os.homedir(), '.claude', 'settings.json');
+  const hookScript = path.join(path.dirname(fileURLToPath(import.meta.url)), 'codegraph-hook.js');
+  const quote = (s) => (/[\s"]/.test(s) ? `"${s.replace(/"/g, '\\"')}"` : s);
+  if (command === 'install') installHook(settingsFile, `${quote(process.execPath)} ${quote(hookScript)}`);
+  else uninstallHook(settingsFile);
   const claudeArgs =
     command === 'install'
       ? ['mcp', 'add', 'codegraph', '-s', 'user', '--', process.execPath, fileURLToPath(import.meta.url)]
       : ['mcp', 'remove', 'codegraph', '-s', 'user'];
   // single command string with explicit quoting: works with the .cmd shim on
   // Windows and avoids unescaped-args concatenation
-  const quote = (s) => (/[\s"]/.test(s) ? `"${s.replace(/"/g, '\\"')}"` : s);
   const r = spawnSync(['claude', ...claudeArgs].map(quote).join(' '), { stdio: 'inherit', shell: true });
   if (r.error || r.status !== 0) {
     console.error(
@@ -82,6 +90,7 @@ if (command === 'index') {
   }
   if (command === 'install') {
     console.log('\ncodegraph registered for all your projects (CLI and VS Code extension).');
+    console.log(`PreToolUse hook added to ${settingsFile} (Read/Bash on indexed files are routed to codegraph tools).`);
     console.log('Restart your Claude Code session, then verify with: claude mcp list');
   }
 } else if (command === null || command === 'serve') {
